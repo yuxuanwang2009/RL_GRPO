@@ -33,9 +33,11 @@ From the latest run described in the project notes:
 - KL divergence stayed low (< 2.0) relative to the starting model.
 - The training curve is noisy but shows a learning signal.
 
-Generated plots:
-- [grpo_training_curve.png](grpo_training_curve.png)
-- [grpo_kl_divergence.png](grpo_kl_divergence.png)
+Generated plots (run [plot_metrics.py](plot_metrics.py) or training to create them):
+
+![Reward and Accuracy](grpo_training_curve.png)
+
+![KL Divergence](grpo_kl_divergence.png)
 
 ## Practical Insights from Implementation
 - **Implementation is the easy part**: getting GRPO to work required careful task choice, reward design, and hyperparameter tuning.

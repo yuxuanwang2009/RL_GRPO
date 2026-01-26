@@ -12,7 +12,7 @@ Key design goals:
 - Training script: [train_grpo.py](train_grpo.py)
 - Inference script: [inference.py](inference.py)
 - Metrics plotting: [plot_metrics.py](plot_metrics.py)
-- Saved model directory (after training): [saved_model/](saved_model/)
+- Saved model directory (after training): (saved_model/)
 
 ## Algorithm Highlights
 - **GRPO updates**: multiple inner policy updates per batch using a PPO-style clipped objective.

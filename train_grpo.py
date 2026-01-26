@@ -21,7 +21,7 @@ class GRPOConfig:
     batch_size: int = 4
     num_generations: int = 8
     max_new_tokens: int = 16
-    num_iterations: int = 2000
+    num_iterations: int = 3000
     
     # PPO/GRPO
     beta: float = 0.04 # Keep beta (or increase to 0.1 if stable) but lower LR first.
@@ -111,7 +111,7 @@ def main():
     policy = AutoModelForCausalLM.from_pretrained(
         model_path,
         attn_implementation=attn_impl,
-        dtype=torch.float32,
+        torch_dtype=torch.float32,
         trust_remote_code=True
     ).to(cfg.device)
     policy.train()
@@ -120,7 +120,7 @@ def main():
     ref = AutoModelForCausalLM.from_pretrained(
         model_path,
         attn_implementation=attn_impl,
-        dtype=torch.float32,
+        torch_dtype=torch.float32,
         trust_remote_code=True
     ).to(cfg.device)
     ref.eval() # eval mode turns off dropout but not gradients. gradients off next.
@@ -194,7 +194,7 @@ def main():
         for a in answers:
             answers_expanded.extend([a] * cfg.num_generations)
             
-        reward_list, accuracy_list = reward_function(None, completions_text, answers_expanded)
+        reward_list, accuracy_list = reward_function(completions_text, answers_expanded)
         rewards = torch.tensor(reward_list, device=cfg.device)
         
         rewards_view = rewards.view(cfg.batch_size, cfg.num_generations)

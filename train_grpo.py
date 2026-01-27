@@ -26,7 +26,7 @@ class GRPOConfig:
     num_iterations: int = 4000
     
     # PPO/GRPO
-    beta: float = 0.08 # KL penalty coefficient
+    beta: float = 0.04 # KL penalty coefficient
     epsilon: float = 0.2
     num_inner_updates: int = 1 # Key stability fix: 1 update per batch to prevent KL explosion
     clip_grad_norm: float = 0.5 # Stricter clipping
@@ -246,7 +246,7 @@ def main():
                 "rewards_avg": rewards_avg,
                 "accuracies_avg": accuracies_avg,
                 "kl_avg": kl_avg
-            }, smooth=False)
+            }, smooth=False, verbose=False)
 
     # Save the trained model
     print("Saving the trained model...")

@@ -13,7 +13,7 @@ def load_metrics(json_path="grpo_metrics.json"):
     with open(json_path, "r") as f:
         return json.load(f)
 
-def plot_metrics(metrics_data, smooth=False, output_prefix="grpo"):
+def plot_metrics(metrics_data, smooth=False, output_prefix="grpo", verbose=False):
     """Plot training metrics and save to PNG files."""
     rewards_avg = metrics_data["rewards_avg"]
     accuracies_avg = metrics_data["accuracies_avg"]
@@ -50,7 +50,8 @@ def plot_metrics(metrics_data, smooth=False, output_prefix="grpo"):
     ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper left", bbox_to_anchor=(0.05, 0.95))
 
     fig.savefig("{}_training_curve.png".format(output_prefix), dpi=100, bbox_inches="tight")
-    print("Saved: {}_training_curve.png".format(output_prefix))
+    if verbose:
+        print("Saved: {}_training_curve.png".format(output_prefix))
 
     # Plot 2: KL Divergence
     fig_kl, ax_kl = plt.subplots()
@@ -62,7 +63,8 @@ def plot_metrics(metrics_data, smooth=False, output_prefix="grpo"):
     ax_kl.set_title("KL Divergence over Training{}".format(" (smoothed)" if smooth else ""))
     ax_kl.legend(loc="upper left")
     fig_kl.savefig("{}_kl_divergence.png".format(output_prefix), dpi=100, bbox_inches="tight")
-    print("Saved: {}_kl_divergence.png".format(output_prefix))
+    if verbose:
+        print("Saved: {}_kl_divergence.png".format(output_prefix))
 
 def main():
     parser = argparse.ArgumentParser(description="Plot GRPO metrics with optional smoothing.")
@@ -70,7 +72,7 @@ def main():
     args = parser.parse_args()
 
     metrics_data = load_metrics()
-    plot_metrics(metrics_data, smooth=args.smooth)
+    plot_metrics(metrics_data, smooth=args.smooth, verbose=True)
     print("Plotting complete!")
 
 if __name__ == "__main__":

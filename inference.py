@@ -2,7 +2,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import argparse
 
-def main():
+def main(math=True):
     parser = argparse.ArgumentParser(description="Generate math answers using trained GRPO model.")
     parser.add_argument("question", type=str, help="The math question to answer (e.g., 'What is 5 + 3?')")
     args = parser.parse_args()
@@ -19,7 +19,10 @@ def main():
     model.to(device)
 
     # Format prompt
-    prompt = f"User: {args.question} Answer in <answer>...</answer>. \nAssistant:"
+    if math:
+        prompt = f"User: {args.question} Answer in <answer>...</answer>. \nAssistant:"
+    else:
+        prompt = f"User: {args.question} \nAssistant:"
 
     # Tokenize
     inputs = tokenizer(prompt, return_tensors="pt").to(device)
@@ -28,7 +31,7 @@ def main():
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
-            max_new_tokens=16,
+            max_new_tokens=32,
             do_sample=True,
             temperature=1.0,
             pad_token_id=tokenizer.pad_token_id
@@ -42,4 +45,4 @@ def main():
     print(f"Generated: {completion}")
 
 if __name__ == "__main__":
-    main()
+    main(math=False)

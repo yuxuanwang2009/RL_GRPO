@@ -10,7 +10,7 @@ def main():
     # Load model and tokenizer
     model_path = "saved_model"
     model = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32, trust_remote_code=True)
-    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True, fix_mistral_regex=True)
+    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 

@@ -5,7 +5,9 @@ from dataclasses import dataclass
 import random
 import re
 import os
+import json
 from collections import deque
+from plot_metrics import plot_metrics
 
 # -----------------------------------------------------------------------------
 # GRPO Configuration
@@ -21,12 +23,12 @@ class GRPOConfig:
     batch_size: int = 4
     num_generations: int = 8
     max_new_tokens: int = 16
-    num_iterations: int = 3000
+    num_iterations: int = 4000
     
     # PPO/GRPO
-    beta: float = 0.04 # Keep beta (or increase to 0.1 if stable) but lower LR first.
+    beta: float = 0.08 # KL penalty coefficient
     epsilon: float = 0.2
-    num_inner_updates: int = 5 # Reduce updates per step to effectively lower LR further
+    num_inner_updates: int = 1 # Key stability fix: 1 update per batch to prevent KL explosion
     clip_grad_norm: float = 0.5 # Stricter clipping
 
 cfg = GRPOConfig()
@@ -127,7 +129,7 @@ def main():
     for p in ref.parameters():
         p.requires_grad = False # make sure backprop does not flow through reference.
         
-    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True, fix_mistral_regex=True)
+    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
         
@@ -135,25 +137,14 @@ def main():
     optimizer = torch.optim.AdamW(policy.parameters(), lr=cfg.learning_rate)
     
     # Recent metrics for averaging, using a deque for efficient popping from left and appending to right
-    recent_rewards = deque(maxlen=10)
-    recent_losses = deque(maxlen=10)
-    recent_accuracies = deque(maxlen=10)
-    recent_kl = deque(maxlen=10)
-    
-    # Plotting Setup
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
+    recent_rewards = deque(maxlen=20)
+    recent_losses = deque(maxlen=20)
+    recent_accuracies = deque(maxlen=20)
+    recent_kl = deque(maxlen=20)
     
     rewards_avg = []
     accuracies_avg = []
     kl_avg = []
-    
-    fig, ax1 = plt.subplots()
-    ax2 = ax1.twinx()
-    ax1.set_xlabel("Step (x10)")
-    ax1.set_ylabel("Reward", color="tab:blue")
-    ax2.set_ylabel("Accuracy", color="tab:orange")
     
     print("Starting Training...")
     
@@ -235,49 +226,27 @@ def main():
         recent_losses.append(loss.item())
         recent_kl.append(kl_loss.item())
         
-        if step % 10 == 0 and len(recent_rewards) >= 10:
-             avg_reward_10 = sum(recent_rewards) / 10
-             avg_loss_10 = sum(recent_losses) / 10
-             avg_acc_10 = sum(recent_accuracies) / 10
-             avg_kl_10 = sum(recent_kl) / 10
-             print(f"Last 10 steps avg: Reward={avg_reward_10:.2f}, Acc={avg_acc_10:.2f}, Loss={avg_loss_10:.4f}, KL={avg_kl_10:.4f}")
-             print(f"  Prompt: {prompts[0]}")
-             print(f"  Completion: {completions_text[0]}")
-             
-             # Plotting Update
-             rewards_avg.append(avg_reward_10)
-             accuracies_avg.append(avg_acc_10)
-             kl_avg.append(avg_kl_10)
-             
-             ax1.clear()
-             ax2.clear()
-             ax1.set_xlabel("Step (x10)")
-             ax1.set_ylabel("Reward", color="tab:blue")
-             ax2.yaxis.set_label_position('right')
-             ax2.set_ylabel("Accuracy", color="tab:orange")
-             
-             ax1.plot(rewards_avg, color="tab:blue", label="Reward (10-step avg)")
-             ax2.plot(accuracies_avg, color="tab:orange", label="Accuracy (10-step avg)")
-             
-             ax1.set_title("Reward, Accuracy, and KL Divergence (10-step averages)")
-             
-             # Combine legends
-             lines1, labels1 = ax1.get_legend_handles_labels()
-             lines2, labels2 = ax2.get_legend_handles_labels()
-             ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper left", bbox_to_anchor=(0.05, 0.95))
-             
-             fig.savefig("grpo_training_curve.png", dpi=100, bbox_inches="tight")
-             
-             # Create separate plot for KL divergence
-             fig_kl, ax_kl = plt.subplots()
-             ax_kl.plot(kl_avg, color="tab:red", label="KL Divergence (10-step avg)")
-             ax_kl.set_xlabel("Step (x10)")
-             ax_kl.set_ylabel("KL Divergence", color="tab:red")
-             ax_kl.tick_params(axis='y', labelcolor="tab:red")
-             ax_kl.set_title("KL Divergence over Training")
-             ax_kl.legend(loc="upper left")
-             fig_kl.savefig("grpo_kl_divergence.png", dpi=100, bbox_inches="tight")
-             plt.close(fig_kl)
+        if step % 10 == 0:
+            l = len(recent_rewards)
+            avg_reward_20 = sum(recent_rewards) / l
+            avg_loss_20 = sum(recent_losses) / l
+            avg_acc_20 = sum(recent_accuracies) / l
+            avg_kl_20 = sum(recent_kl) / l
+            print(f"Last 20 steps avg: Reward={avg_reward_20:.2f}, Acc={avg_acc_20:.2f}, Loss={avg_loss_20:.4f}, KL={avg_kl_20:.4f}")
+            print(f"  Prompt: {prompts[0]}")
+            print(f"  Completion: {completions_text[0]}")
+            
+            # Plotting Update
+            rewards_avg.append(avg_reward_20)
+            accuracies_avg.append(avg_acc_20)
+            kl_avg.append(avg_kl_20)
+            
+            # Plot metrics every 10 steps
+            plot_metrics({
+                "rewards_avg": rewards_avg,
+                "accuracies_avg": accuracies_avg,
+                "kl_avg": kl_avg
+            }, smooth=False)
 
     # Save the trained model
     print("Saving the trained model...")
@@ -286,7 +255,6 @@ def main():
     print("Model saved to 'saved_model' directory.")
     
     # Save metrics data
-    import json
     metrics_data = {
         "rewards_avg": rewards_avg,
         "accuracies_avg": accuracies_avg,

@@ -79,9 +79,9 @@ Key hyperparameters (see [train_grpo.py](train_grpo.py)):
 - `num_generations`: 8
 - `max_new_tokens`: 16
 - `num_iterations`: 2000
-- `beta`: 0.04
+- `beta`: 0.08
 - `epsilon`: 0.2
-- `num_inner_updates`: 5
+- `num_inner_updates`: 1
 - `clip_grad_norm`: 0.5
 
 ## Notes

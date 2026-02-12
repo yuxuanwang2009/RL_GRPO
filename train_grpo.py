@@ -16,7 +16,7 @@ from plot_metrics import plot_metrics
 class GRPOConfig:
     # Model
     model_name: str = "Qwen/Qwen2.5-0.5B-Instruct"
-    device: str = "cuda"
+    device: str = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
     
     # Training
     learning_rate: float = 1e-7 # Lowered from 1e-6 to prevent collapse
@@ -117,21 +117,22 @@ def main():
         trust_remote_code=True
     ).to(cfg.device)
     policy.train()
+    policy = torch.compile(policy)
     
-    # Reference
+    # Reference, used for KL divergence
     ref = AutoModelForCausalLM.from_pretrained(
         model_path,
         attn_implementation=attn_impl,
         torch_dtype=torch.float32,
-        trust_remote_code=True
+        trust_remote_code=True # needed for Qwen because it has some custom code
     ).to(cfg.device)
     ref.eval() # eval mode turns off dropout but not gradients. gradients off next.
     for p in ref.parameters():
         p.requires_grad = False # make sure backprop does not flow through reference.
-        
+    ref = torch.compile(ref)
+    
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+
         
     # AdamW basically adopts a non-Euclidean geometry in the parameter space, ensuring isotropy of gradient std.
     optimizer = torch.optim.AdamW(policy.parameters(), lr=cfg.learning_rate)
@@ -147,9 +148,6 @@ def main():
     kl_avg = []
     
     print("Starting Training...")
-    
-    torch.cuda.empty_cache()
-    
     for step in range(cfg.num_iterations):
         # 1. Generate Batch
         prompts = []
@@ -166,7 +164,9 @@ def main():
         # Sampling
         # Generate completions for get_logprobs on these completions later. get_logprobs is batched so more efficient. right now, no grad needed.
         with torch.no_grad():
+            # batch_size prompts, each prompt has num_generations repetitions
             input_ids_expanded = inputs.input_ids.repeat_interleave(cfg.num_generations, dim=0)
+            # attention mask masks the padding tokens
             attn_mask_expanded = inputs.attention_mask.repeat_interleave(cfg.num_generations, dim=0)
             
             sequences = policy.generate(
@@ -175,9 +175,18 @@ def main():
                 max_new_tokens=cfg.max_new_tokens,
                 do_sample=True,
                 temperature=1.0,
-                pad_token_id=tokenizer.pad_token_id
+                pad_token_id=tokenizer.pad_token_id # for Qwen2.5/0.5B-Instruct, both pad_token_id and eos_token_id (actually generated in pretrained model) are <|endoftext|>
             )
-            
+
+        # Note: The returned sequences are padded to the longest sequence in the batch.
+        # If some sequences stop early (e.g., generate EOS), they are right-padded with pad_token_id
+        # to match the longest sequence. This means the sequences tensor contains padding tokens
+        # that will be included in loss calculations unless explicitly masked out.
+
+        # Create mask to exclude padding tokens (EOS used as padding after first EOS)
+        completion_ids = sequences[:, prompt_len:]
+        mask = (completion_ids != tokenizer.eos_token_id).float()  # Shape: [batch_size * num_generations, T]
+
         # Skips text after EOT.
         completions_text = tokenizer.batch_decode(sequences[:, prompt_len:], skip_special_tokens=True)
         
@@ -198,22 +207,28 @@ def main():
         back_input_ids = sequences
         with torch.no_grad(): # No grad for ref and old policy
             ref_logprobs = get_batch_logprobs(ref, back_input_ids, prompt_len)
-            old_logprobs = get_batch_logprobs(policy, back_input_ids, prompt_len)
+            # the only difference between old and new policy is torch.no_grad() when cfg.num_inner_updates = 1.
+            old_logprobs = get_batch_logprobs(policy, back_input_ids, prompt_len) 
             
         for _ in range(cfg.num_inner_updates): # multiple GRPO updates with the old model fixed.
             curr_logprobs = get_batch_logprobs(policy, back_input_ids, prompt_len)
             
             ratio = torch.exp(curr_logprobs - old_logprobs)
-            surr1 = ratio * advantages.unsqueeze(1)
+            surr1 = ratio * advantages.unsqueeze(1) # broadcasting: [batch_size * num_generations, T] * [batch_size * num_generations, 1]
             surr2 = torch.clamp(ratio, 1-cfg.epsilon, 1+cfg.epsilon) * advantages.unsqueeze(1)
-            ppo_loss = -torch.min(surr1, surr2).mean()
-            
+
+            # Masked loss: exclude padding tokens
+            ppo_values = -torch.min(surr1, surr2)  # [batch_size * num_generations, T]
+            ppo_per_sample = (ppo_values * mask).sum(dim=1) / (mask.sum(dim=1) + 1e-8)  # Average per sequence
+            ppo_loss = ppo_per_sample.mean()  # Average across batch
+
             kl = torch.exp(curr_logprobs - ref_logprobs) - (curr_logprobs - ref_logprobs) - 1
-            kl_loss = kl.mean()
+            kl_per_sample = (kl * mask).sum(dim=1) / (mask.sum(dim=1) + 1e-8)  # Average per sequence
+            kl_loss = kl_per_sample.mean()  # Average across batch
             
             loss = ppo_loss + cfg.beta * kl_loss
             
-            optimizer.zero_grad() # clear gradients
+            optimizer.zero_grad(set_to_none=True) # clear gradients
             loss.backward()
             torch.nn.utils.clip_grad_norm_(policy.parameters(), cfg.clip_grad_norm)
             optimizer.step()

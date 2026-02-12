@@ -9,6 +9,11 @@ import json
 from collections import deque
 from plot_metrics import plot_metrics
 
+
+def configure_float32_matmul_precision():
+    if torch.cuda.is_available():
+        torch.set_float32_matmul_precision('high')
+
 # -----------------------------------------------------------------------------
 # GRPO Configuration
 # -----------------------------------------------------------------------------
@@ -22,7 +27,7 @@ class GRPOConfig:
     learning_rate: float = 1e-7 # Lowered from 1e-6 to prevent collapse
     batch_size: int = 4
     num_generations: int = 8
-    max_new_tokens: int = 16
+    max_new_tokens: int = 32
     num_iterations: int = 4000
     
     # PPO/GRPO
@@ -36,7 +41,9 @@ cfg = GRPOConfig()
 # -----------------------------------------------------------------------------
 # Task: Multi-step Arithmetic
 # Task: "What is (X op1 Y) op2 Z?" with order of operations
-# Reward: +0.2 for <answer>...</answer> format, +0.2 if within ±3, +0.6 if exact
+# Reward:
+# +0.1 if <work>...</work> appears before <answer>...</answer>.
+# +0.6 if <answer> is exactly correct.
 # -----------------------------------------------------------------------------
 def get_prompt():
     # Generate a simple multi-step expression: (a op1 b) op2 c
@@ -48,28 +55,33 @@ def get_prompt():
     
     expression = f"({a} {op1} {b}) {op2} {c}"
     answer = eval(expression)  # Safe since controlled input
-    text = f"User: What is {expression}? Answer in <answer>...</answer>. \nAssistant:"
+    text = f"User: What is {expression}? Use <work>...</work> for intermediate step, and <answer>...</answer> for final answer. \nAssistant:"
     return text, str(answer)
 
 def reward_function(completions, answers):
     rewards = []
     accuracies = []
-    
+
     for completion, correct_ans in zip(completions, answers):
         r = 0.0
         acc = 0.0
         correct = int(correct_ans)
 
-        if match := re.search(r'<answer>(.*?)</answer>', completion):
-            answer_text = match.group(1).strip()
-            r += 0.2
-            
+        work_match = re.search(r'<work>(.*?)</work>', completion, flags=re.DOTALL)
+        answer_match = re.search(r'<answer>(.*?)</answer>', completion, flags=re.DOTALL)
+
+        if work_match and answer_match:
+            answer_text = answer_match.group(1).strip()
+            has_ordered_non_nested_tags = (
+                work_match.start() < work_match.end() <= answer_match.start() < answer_match.end()
+            )
+            if has_ordered_non_nested_tags:
+                r += 0.5
+
             try:
                 pred = int(answer_text)
-                if abs(pred - correct) <= 1:
-                    r += 0.2
                 if pred == correct:
-                    r += 0.6
+                    r += 0.5
                     acc = 1.0
             except ValueError:
                 pass  # Not a number, no extra reward
@@ -96,6 +108,7 @@ def get_batch_logprobs(model, input_ids, prompt_len):
 # Main Loop
 # -----------------------------------------------------------------------------
 def main():
+    configure_float32_matmul_precision()
     print(f"Loading {cfg.model_name} on {cfg.device}...")
     
     # Check if saved model exists
@@ -117,9 +130,7 @@ def main():
         trust_remote_code=True
     ).to(cfg.device)
     policy.train()
-    # Only use torch.compile for CUDA (issues with MPS and CPU)
-    if cfg.device == "cuda":
-        policy = torch.compile(policy)
+
 
     # Reference, used for KL divergence
     ref = AutoModelForCausalLM.from_pretrained(
@@ -131,8 +142,6 @@ def main():
     ref.eval() # eval mode turns off dropout but not gradients. gradients off next.
     for p in ref.parameters():
         p.requires_grad = False # make sure backprop does not flow through reference.
-    if cfg.device == "cuda":
-        ref = torch.compile(ref)
     
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
 

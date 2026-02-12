@@ -2,7 +2,13 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import argparse
 
+
+def configure_float32_matmul_precision():
+    if torch.cuda.is_available():
+        torch.set_float32_matmul_precision('high')
+
 def main(math=True):
+    configure_float32_matmul_precision()
     parser = argparse.ArgumentParser(description="Generate math answers using trained GRPO model.")
     parser.add_argument("question", type=str, help="The math question to answer (e.g., 'What is 5 + 3?')")
     args = parser.parse_args()

@@ -16,13 +16,19 @@ def load_metrics(json_path="grpo_metrics.json"):
 def plot_metrics(metrics_data, smooth=False, output_prefix="grpo", verbose=False):
     """Plot training metrics and save to PNG files."""
     rewards_avg = metrics_data["rewards_avg"]
-    accuracies_avg = metrics_data["accuracies_avg"]
+    if "train_accuracies_avg" in metrics_data and "val_accuracies_avg" in metrics_data:
+        train_accuracies_avg = metrics_data["train_accuracies_avg"]
+        val_accuracies_avg = metrics_data["val_accuracies_avg"]
+    else:
+        # Backward compatibility with older metrics format
+        train_accuracies_avg = metrics_data["accuracies_avg"]
+        val_accuracies_avg = metrics_data["accuracies_avg"]
     kl_avg = metrics_data["kl_avg"]
 
     if smooth:
         window = 10
         rewards_avg = moving_average(rewards_avg, window)
-        accuracies_avg = moving_average(accuracies_avg, window)
+        train_accuracies_avg = moving_average(train_accuracies_avg, window)
         kl_avg = moving_average(kl_avg, window)
         x_offset = window - 1
     else:
@@ -38,11 +44,13 @@ def plot_metrics(metrics_data, smooth=False, output_prefix="grpo", verbose=False
     ax2.set_ylabel("Accuracy", color="tab:orange")
     ax2.set_ylim(0, 1)
 
-    x = range(x_offset, x_offset + len(rewards_avg))
-    ax1.plot(x, rewards_avg, color="tab:blue", label="Reward")
-    ax2.plot(x, accuracies_avg, color="tab:orange", label="Accuracy")
+    x_main = range(x_offset, x_offset + len(rewards_avg))
+    x_val = range(len(val_accuracies_avg))
+    ax1.plot(x_main, rewards_avg, color="tab:blue", label="Reward")
+    ax2.plot(x_main, train_accuracies_avg, color="tab:orange", label="Train Accuracy")
+    ax2.plot(x_val, val_accuracies_avg, color="tab:green", label="Val Accuracy")
 
-    ax1.set_title("Reward and Accuracy{}".format(" (smoothed)" if smooth else " (20-step averages)"))
+    ax1.set_title("Reward and Train/Val Accuracy{}".format(" (train/reward smoothed)" if smooth else " (20-step averages)"))
 
     # Combine legends
     lines1, labels1 = ax1.get_legend_handles_labels()
@@ -50,19 +58,21 @@ def plot_metrics(metrics_data, smooth=False, output_prefix="grpo", verbose=False
     ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper left", bbox_to_anchor=(0.05, 0.95))
 
     fig.savefig("{}_training_curve.png".format(output_prefix), dpi=100, bbox_inches="tight")
+    plt.close(fig)
     if verbose:
         print("Saved: {}_training_curve.png".format(output_prefix))
 
     # Plot 2: KL Divergence
     fig_kl, ax_kl = plt.subplots()
-    ax_kl.plot(x, kl_avg, color="tab:red", label="KL Divergence")
+    ax_kl.plot(x_main, kl_avg, color="tab:red", label="KL Divergence")
     ax_kl.set_xlabel("Step (x10)")
     ax_kl.set_ylabel("KL Divergence", color="tab:red")
-    ax_kl.set_ylim(0, 2)
+    ax_kl.set_ylim(0, 4)
     ax_kl.tick_params(axis='y', labelcolor="tab:red")
     ax_kl.set_title("KL Divergence over Training{}".format(" (smoothed)" if smooth else ""))
     ax_kl.legend(loc="upper left")
     fig_kl.savefig("{}_kl_divergence.png".format(output_prefix), dpi=100, bbox_inches="tight")
+    plt.close(fig_kl)
     if verbose:
         print("Saved: {}_kl_divergence.png".format(output_prefix))
 

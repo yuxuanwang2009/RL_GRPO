@@ -9,6 +9,10 @@ import json
 from collections import deque
 from plot_metrics import plot_metrics
 
+def configure_float32_matmul_precision():
+    if torch.cuda.is_available():
+        torch.set_float32_matmul_precision('high')
+
 # -----------------------------------------------------------------------------
 # GRPO Configuration
 # -----------------------------------------------------------------------------
@@ -21,12 +25,12 @@ class GRPOConfig:
     # Training
     learning_rate: float = 1e-7 # Lowered from 1e-6 to prevent collapse
     batch_size: int = 4
-    num_generations: int = 8
+    num_generations: int = 16
     max_new_tokens: int = 16
     num_iterations: int = 4000
     
     # PPO/GRPO
-    beta: float = 0.04 # KL penalty coefficient
+    beta: float = 0.03 # KL penalty coefficient
     epsilon: float = 0.2
     num_inner_updates: int = 1 # Key stability fix: 1 update per batch to prevent KL explosion
     clip_grad_norm: float = 0.5 # Stricter clipping
@@ -38,18 +42,48 @@ cfg = GRPOConfig()
 # Task: "What is (X op1 Y) op2 Z?" with order of operations
 # Reward: +0.2 for <answer>...</answer> format, +0.2 if within ±3, +0.6 if exact
 # -----------------------------------------------------------------------------
-def get_prompt():
-    # Generate a simple multi-step expression: (a op1 b) op2 c
-    a = random.randint(0, 10)
-    b = random.randint(0, 10)
+def get_prompt(split="train"):
+    # Hidden split rule:
+    # train -> at least one of a, b, c is odd
+    # val   -> all of a, b, c are even
+    if split not in {"train", "val"}:
+        raise ValueError("split must be 'train' or 'val'")
+
+    while True:
+        a = random.randint(0, 20)
+        b = random.randint(0, 20)
+        c = random.randint(0, 20)
+        if split == "train" and ((a % 2 == 1) or (b % 2 == 1) or (c % 2 == 1)):
+            break
+        if split == "val" and ((a % 2 == 0) and (b % 2 == 0) and (c % 2 == 0)):
+            break
+
     op1 = random.choice(['+', '-', '*'])
-    c = random.randint(0, 10)
     op2 = random.choice(['+', '-', '*'])
     
     expression = f"({a} {op1} {b}) {op2} {c}"
     answer = eval(expression)  # Safe since controlled input
     text = f"User: What is {expression}? Answer in <answer>...</answer>. \nAssistant:"
     return text, str(answer)
+
+
+def evaluate_accuracy(model, tokenizer, prompts, answers, device, max_new_tokens):
+    tokenizer.padding_side = 'left'
+    inputs = tokenizer(prompts, return_tensors="pt", padding=True).to(device)
+    prompt_len = inputs.input_ids.shape[1]
+
+    with torch.no_grad():
+        sequences = model.generate(
+            input_ids=inputs.input_ids,
+            attention_mask=inputs.attention_mask,
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+            pad_token_id=tokenizer.pad_token_id
+        )
+
+    completions_text = tokenizer.batch_decode(sequences[:, prompt_len:], skip_special_tokens=True)
+    _, accuracy_list = reward_function(completions_text, answers)
+    return sum(accuracy_list) / len(accuracy_list) if accuracy_list else 0.0
 
 def reward_function(completions, answers):
     rewards = []
@@ -96,6 +130,7 @@ def get_batch_logprobs(model, input_ids, prompt_len):
 # Main Loop
 # -----------------------------------------------------------------------------
 def main():
+    configure_float32_matmul_precision()
     print(f"Loading {cfg.model_name} on {cfg.device}...")
     
     # Check if saved model exists
@@ -117,9 +152,6 @@ def main():
         trust_remote_code=True
     ).to(cfg.device)
     policy.train()
-    # Only use torch.compile for CUDA (issues with MPS and CPU)
-    if cfg.device == "cuda":
-        policy = torch.compile(policy)
 
     # Reference, used for KL divergence
     ref = AutoModelForCausalLM.from_pretrained(
@@ -131,8 +163,6 @@ def main():
     ref.eval() # eval mode turns off dropout but not gradients. gradients off next.
     for p in ref.parameters():
         p.requires_grad = False # make sure backprop does not flow through reference.
-    if cfg.device == "cuda":
-        ref = torch.compile(ref)
     
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
 
@@ -147,7 +177,8 @@ def main():
     recent_kl = deque(maxlen=20)
     
     rewards_avg = []
-    accuracies_avg = []
+    train_accuracies_avg = []
+    val_accuracies_avg = []
     kl_avg = []
     
     print("Starting Training...")
@@ -156,7 +187,7 @@ def main():
         prompts = []
         answers = []
         for _ in range(cfg.batch_size):
-            p, a = get_prompt()
+            p, a = get_prompt(split="train")
             prompts.append(p)
             answers.append(a)
             
@@ -190,7 +221,7 @@ def main():
         completion_ids = sequences[:, prompt_len:]
         mask = (completion_ids != tokenizer.eos_token_id).float()  # Shape: [batch_size * num_generations, T]
 
-        # Skips text after EOT.
+        # Skips padding IDs.
         completions_text = tokenizer.batch_decode(sequences[:, prompt_len:], skip_special_tokens=True)
         
         answers_expanded = []
@@ -248,21 +279,39 @@ def main():
             l = len(recent_rewards)
             avg_reward_20 = sum(recent_rewards) / l
             avg_loss_20 = sum(recent_losses) / l
-            avg_acc_20 = sum(recent_accuracies) / l
+            train_acc_20 = sum(recent_accuracies) / l
             avg_kl_20 = sum(recent_kl) / l
-            print(f"Last 20 steps avg: Reward={avg_reward_20:.2f}, Acc={avg_acc_20:.2f}, Loss={avg_loss_20:.4f}, KL={avg_kl_20:.4f}")
+
+            val_prompts = []
+            val_answers = []
+            for _ in range(cfg.batch_size):
+                p, a = get_prompt(split="val")
+                val_prompts.append(p)
+                val_answers.append(a)
+            val_acc = evaluate_accuracy(
+                policy,
+                tokenizer,
+                val_prompts,
+                val_answers,
+                cfg.device,
+                cfg.max_new_tokens
+            )
+
+            print(f"Last 20 steps avg: Reward={avg_reward_20:.2f}, TrainAcc={train_acc_20:.2f}, ValAcc={val_acc:.2f}, Loss={avg_loss_20:.4f}, KL={avg_kl_20:.4f}")
             print(f"  Prompt: {prompts[0]}")
             print(f"  Completion: {completions_text[0]}")
             
             # Plotting Update
             rewards_avg.append(avg_reward_20)
-            accuracies_avg.append(avg_acc_20)
+            train_accuracies_avg.append(train_acc_20)
+            val_accuracies_avg.append(val_acc)
             kl_avg.append(avg_kl_20)
             
             # Plot metrics every 10 steps
             plot_metrics({
                 "rewards_avg": rewards_avg,
-                "accuracies_avg": accuracies_avg,
+                "train_accuracies_avg": train_accuracies_avg,
+                "val_accuracies_avg": val_accuracies_avg,
                 "kl_avg": kl_avg
             }, smooth=False, verbose=False)
 
@@ -275,7 +324,8 @@ def main():
     # Save metrics data
     metrics_data = {
         "rewards_avg": rewards_avg,
-        "accuracies_avg": accuracies_avg,
+        "train_accuracies_avg": train_accuracies_avg,
+        "val_accuracies_avg": val_accuracies_avg,
         "kl_avg": kl_avg
     }
     with open("grpo_metrics.json", "w") as f:

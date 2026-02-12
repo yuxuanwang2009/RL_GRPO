@@ -15,7 +15,6 @@ def load_metrics(json_path="grpo_metrics.json"):
 
 def plot_metrics(metrics_data, smooth=False, output_prefix="grpo", verbose=False):
     """Plot training metrics and save to PNG files."""
-    rewards_avg = metrics_data["rewards_avg"]
     if "train_accuracies_avg" in metrics_data and "val_accuracies_avg" in metrics_data:
         train_accuracies_avg = metrics_data["train_accuracies_avg"]
         val_accuracies_avg = metrics_data["val_accuracies_avg"]
@@ -27,35 +26,25 @@ def plot_metrics(metrics_data, smooth=False, output_prefix="grpo", verbose=False
 
     if smooth:
         window = 10
-        rewards_avg = moving_average(rewards_avg, window)
         train_accuracies_avg = moving_average(train_accuracies_avg, window)
         kl_avg = moving_average(kl_avg, window)
         x_offset = window - 1
     else:
         x_offset = 0
 
-    # Plot 1: Reward and Accuracy
-    fig, ax1 = plt.subplots()
-    ax2 = ax1.twinx()
-    ax1.set_xlabel("Step (x10)")
-    ax1.set_ylabel("Reward", color="tab:blue")
-    ax1.set_ylim(0, 1)
-    ax2.yaxis.set_label_position('right')
-    ax2.set_ylabel("Accuracy", color="tab:orange")
-    ax2.set_ylim(0, 1)
+    # Plot 1: Accuracy
+    fig, ax = plt.subplots()
+    ax.set_xlabel("Step (x10)")
+    ax.set_ylabel("Accuracy")
+    ax.set_ylim(0, 1)
 
-    x_main = range(x_offset, x_offset + len(rewards_avg))
+    x_main = range(x_offset, x_offset + len(train_accuracies_avg))
     x_val = range(len(val_accuracies_avg))
-    ax1.plot(x_main, rewards_avg, color="tab:blue", label="Reward")
-    ax2.plot(x_main, train_accuracies_avg, color="tab:orange", label="Train Accuracy")
-    ax2.plot(x_val, val_accuracies_avg, color="tab:green", label="Val Accuracy")
+    ax.plot(x_main, train_accuracies_avg, color="tab:orange", label="Train Accuracy")
+    ax.plot(x_val, val_accuracies_avg, color="tab:green", label="Val Accuracy")
 
-    ax1.set_title("Reward and Train/Val Accuracy{}".format(" (train/reward smoothed)" if smooth else " (20-step averages)"))
-
-    # Combine legends
-    lines1, labels1 = ax1.get_legend_handles_labels()
-    lines2, labels2 = ax2.get_legend_handles_labels()
-    ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper left", bbox_to_anchor=(0.05, 0.95))
+    ax.set_title("Train/Val Accuracy{}".format(" (train smoothed)" if smooth else " (20-step averages)"))
+    ax.legend(loc="upper left", bbox_to_anchor=(0.05, 0.95))
 
     fig.savefig("{}_training_curve.png".format(output_prefix), dpi=100, bbox_inches="tight")
     plt.close(fig)

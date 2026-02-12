@@ -25,12 +25,13 @@ class GRPOConfig:
     # Training
     learning_rate: float = 1e-7 # Lowered from 1e-6 to prevent collapse
     batch_size: int = 4
+    val_batch_size: int = 32
     num_generations: int = 16
     max_new_tokens: int = 16
     num_iterations: int = 4000
     
     # PPO/GRPO
-    beta: float = 0.03 # KL penalty coefficient
+    beta: float = 0.025 # KL penalty coefficient
     epsilon: float = 0.2
     num_inner_updates: int = 1 # Key stability fix: 1 update per batch to prevent KL explosion
     clip_grad_norm: float = 0.5 # Stricter clipping
@@ -284,7 +285,7 @@ def main():
 
             val_prompts = []
             val_answers = []
-            for _ in range(cfg.batch_size):
+            for _ in range(cfg.val_batch_size):
                 p, a = get_prompt(split="val")
                 val_prompts.append(p)
                 val_answers.append(a)

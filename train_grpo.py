@@ -117,8 +117,10 @@ def main():
         trust_remote_code=True
     ).to(cfg.device)
     policy.train()
-    policy = torch.compile(policy)
-    
+    # Only use torch.compile for CUDA (issues with MPS and CPU)
+    if cfg.device == "cuda":
+        policy = torch.compile(policy)
+
     # Reference, used for KL divergence
     ref = AutoModelForCausalLM.from_pretrained(
         model_path,
@@ -129,7 +131,8 @@ def main():
     ref.eval() # eval mode turns off dropout but not gradients. gradients off next.
     for p in ref.parameters():
         p.requires_grad = False # make sure backprop does not flow through reference.
-    ref = torch.compile(ref)
+    if cfg.device == "cuda":
+        ref = torch.compile(ref)
     
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
 

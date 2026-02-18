@@ -23,15 +23,15 @@ class GRPOConfig:
     device: str = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
     
     # Training
-    learning_rate: float = 1e-7 # Lowered from 1e-6 to prevent collapse
+    learning_rate: float = 5e-7 # Raised from 1e-7 — model needs stronger signal to learn reasoning patterns
     batch_size: int = 4
     val_batch_size: int = 32
     num_generations: int = 16
-    max_new_tokens: int = 16
+    max_new_tokens: int = 64 # Raised from 16 — critical for chain-of-thought reasoning
     num_iterations: int = 4000
     
     # PPO/GRPO
-    beta: float = 0.025 # KL penalty coefficient
+    beta: float = 0.02 # Lowered from 0.025 — allow more policy divergence for exploration
     epsilon: float = 0.2
     num_inner_updates: int = 1 # Key stability fix: 1 update per batch to prevent KL explosion
     clip_grad_norm: float = 0.5 # Stricter clipping
@@ -51,9 +51,9 @@ def get_prompt(split="train"):
         raise ValueError("split must be 'train' or 'val'")
 
     while True:
-        a = random.randint(0, 20)
-        b = random.randint(0, 20)
-        c = random.randint(0, 20)
+        a = random.randint(0, 15)
+        b = random.randint(0, 15)
+        c = random.randint(0, 15)
         if split == "train" and ((a % 2 == 1) or (b % 2 == 1) or (c % 2 == 1)):
             break
         if split == "val" and ((a % 2 == 0) and (b % 2 == 0) and (c % 2 == 0)):
@@ -64,7 +64,7 @@ def get_prompt(split="train"):
     
     expression = f"({a} {op1} {b}) {op2} {c}"
     answer = eval(expression)  # Safe since controlled input
-    text = f"User: What is {expression}? Answer in <answer>...</answer>. \nAssistant:"
+    text = f"User: What is {expression}? Think step by step, then put your final answer in <answer>...</answer>.\nAssistant:"
     return text, str(answer)
 
 

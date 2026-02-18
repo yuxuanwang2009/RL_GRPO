@@ -9,9 +9,6 @@ import json
 from collections import deque
 from plot_metrics import plot_metrics
 
-def configure_float32_matmul_precision():
-    if torch.cuda.is_available():
-        torch.set_float32_matmul_precision('high')
 
 # -----------------------------------------------------------------------------
 # GRPO Configuration
@@ -23,15 +20,15 @@ class GRPOConfig:
     device: str = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
     
     # Training
-    learning_rate: float = 5e-7 # Raised from 1e-7 — model needs stronger signal to learn reasoning patterns
+    learning_rate: float = 2e-6 # Raised from 1e-7 — model needs stronger signal to learn reasoning patterns
     batch_size: int = 4
     val_batch_size: int = 32
     num_generations: int = 16
     max_new_tokens: int = 64 # Raised from 16 — critical for chain-of-thought reasoning
-    num_iterations: int = 4000
+    num_iterations: int = 1200
     
     # PPO/GRPO
-    beta: float = 0.02 # Lowered from 0.025 — allow more policy divergence for exploration
+    beta: float = 0.01 # Lowered from 0.025 — allow more policy divergence for exploration
     epsilon: float = 0.2
     num_inner_updates: int = 1 # Key stability fix: 1 update per batch to prevent KL explosion
     clip_grad_norm: float = 0.5 # Stricter clipping
@@ -41,7 +38,7 @@ cfg = GRPOConfig()
 # -----------------------------------------------------------------------------
 # Task: Multi-step Arithmetic
 # Task: "What is (X op1 Y) op2 Z?" with order of operations
-# Reward: +0.2 for <answer>...</answer> format, +0.2 if within ±3, +0.6 if exact
+# Reward: +0.0 for <answer>...</answer> format, +0.0 if within ±1, +1.0 if exact
 # -----------------------------------------------------------------------------
 def get_prompt(split="train"):
     # Hidden split rule:
@@ -51,9 +48,9 @@ def get_prompt(split="train"):
         raise ValueError("split must be 'train' or 'val'")
 
     while True:
-        a = random.randint(0, 15)
-        b = random.randint(0, 15)
-        c = random.randint(0, 15)
+        a = random.randint(50, 70)
+        b = random.randint(50, 70)
+        c = random.randint(50, 70)
         if split == "train" and ((a % 2 == 1) or (b % 2 == 1) or (c % 2 == 1)):
             break
         if split == "val" and ((a % 2 == 0) and (b % 2 == 0) and (c % 2 == 0)):
@@ -97,14 +94,14 @@ def reward_function(completions, answers):
 
         if match := re.search(r'<answer>(.*?)</answer>', completion):
             answer_text = match.group(1).strip()
-            r += 0.2
+            r += 0.0
             
             try:
                 pred = int(answer_text)
                 if abs(pred - correct) <= 1:
-                    r += 0.2
+                    r += 0.0
                 if pred == correct:
-                    r += 0.6
+                    r += 1.0
                     acc = 1.0
             except ValueError:
                 pass  # Not a number, no extra reward
@@ -131,7 +128,6 @@ def get_batch_logprobs(model, input_ids, prompt_len):
 # Main Loop
 # -----------------------------------------------------------------------------
 def main():
-    configure_float32_matmul_precision()
     print(f"Loading {cfg.model_name} on {cfg.device}...")
     
     # Check if saved model exists
@@ -149,7 +145,7 @@ def main():
     policy = AutoModelForCausalLM.from_pretrained(
         model_path,
         attn_implementation=attn_impl,
-        torch_dtype=torch.float32,
+        torch_dtype=torch.bfloat16,
         trust_remote_code=True
     ).to(cfg.device)
     policy.train()
@@ -158,7 +154,7 @@ def main():
     ref = AutoModelForCausalLM.from_pretrained(
         model_path,
         attn_implementation=attn_impl,
-        torch_dtype=torch.float32,
+        torch_dtype=torch.bfloat16,
         trust_remote_code=True # needed for Qwen because it has some custom code
     ).to(cfg.device)
     ref.eval() # eval mode turns off dropout but not gradients. gradients off next.
@@ -166,6 +162,13 @@ def main():
         p.requires_grad = False # make sure backprop does not flow through reference.
     
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+
+    # Reset generation config to avoid model defaults (Qwen sets top_k=20, top_p=0.8, etc.)
+    from transformers import GenerationConfig
+    policy.generation_config = GenerationConfig(
+        pad_token_id=tokenizer.pad_token_id,
+        eos_token_id=tokenizer.eos_token_id,
+    )
 
         
     # AdamW basically adopts a non-Euclidean geometry in the parameter space, ensuring isotropy of gradient std.
@@ -184,6 +187,11 @@ def main():
     
     print("Starting Training...")
     for step in range(cfg.num_iterations):
+        # Update reference model periodically to allow continued improvement
+        if step % 200 == 0 and step > 0:
+            print(f"Step {step}: Updating reference model to current policy.")
+            ref.load_state_dict(policy.state_dict())
+
         # 1. Generate Batch
         prompts = []
         answers = []
@@ -209,8 +217,11 @@ def main():
                 attention_mask=attn_mask_expanded,
                 max_new_tokens=cfg.max_new_tokens,
                 do_sample=True,
-                temperature=1.0,
-                pad_token_id=tokenizer.pad_token_id # for Qwen2.5/0.5B-Instruct, both pad_token_id and eos_token_id (actually generated in pretrained model) are <|endoftext|>
+                temperature=1.2,
+                top_k=0,           # disable top-k filtering
+                top_p=1.0,         # disable nucleus sampling
+                repetition_penalty=1.0,  # disable repetition penalty
+                pad_token_id=tokenizer.pad_token_id
             )
 
         # Note: The returned sequences are padded to the longest sequence in the batch.
@@ -218,10 +229,10 @@ def main():
         # to match the longest sequence. This means the sequences tensor contains padding tokens
         # that will be included in loss calculations unless explicitly masked out.
 
-        # Create mask to exclude padding tokens (EOS used as padding after first EOS)
+        # Mask out EOS and everything after it
         completion_ids = sequences[:, prompt_len:]
-        mask = (completion_ids != tokenizer.eos_token_id).float()  # Shape: [batch_size * num_generations, T]
-
+        is_eos = (completion_ids == tokenizer.eos_token_id)
+        mask = (~is_eos.cumsum(dim=1).bool()).float()  # 1 before first EOS, 0 after
         # Skips padding IDs.
         completions_text = tokenizer.batch_decode(sequences[:, prompt_len:], skip_special_tokens=True)
         

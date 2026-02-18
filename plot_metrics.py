@@ -24,11 +24,15 @@ def plot_metrics(metrics_data, smooth=False, output_prefix="grpo", verbose=False
         val_accuracies_avg = metrics_data["accuracies_avg"]
     kl_avg = metrics_data["kl_avg"]
 
+    window = 10
     if smooth:
-        window = 10
-        train_accuracies_avg = moving_average(train_accuracies_avg, window)
-        kl_avg = moving_average(kl_avg, window)
-        x_offset = window - 1
+        if len(train_accuracies_avg) >= window:
+            train_accuracies_avg = moving_average(train_accuracies_avg, window)
+        if len(val_accuracies_avg) >= window:
+            val_accuracies_avg = moving_average(val_accuracies_avg, window)
+        if len(kl_avg) >= window:
+            kl_avg = moving_average(kl_avg, window)
+        x_offset = max(0, window - 1) if len(metrics_data.get("kl_avg", [])) >= window else 0
     else:
         x_offset = 0
 
@@ -38,12 +42,14 @@ def plot_metrics(metrics_data, smooth=False, output_prefix="grpo", verbose=False
     ax.set_ylabel("Accuracy")
     ax.set_ylim(0, 1)
 
-    x_main = range(x_offset, x_offset + len(train_accuracies_avg))
-    x_val = range(len(val_accuracies_avg))
-    ax.plot(x_main, train_accuracies_avg, color="tab:orange", label="Train Accuracy")
+    x_train_offset = x_offset if smooth and len(metrics_data.get("train_accuracies_avg", metrics_data.get("accuracies_avg", []))) >= window else 0
+    x_val_offset = x_offset if smooth and len(metrics_data.get("val_accuracies_avg", metrics_data.get("accuracies_avg", []))) >= window else 0
+    x_main = range(x_train_offset, x_train_offset + len(train_accuracies_avg))
+    x_val = range(x_val_offset, x_val_offset + len(val_accuracies_avg))
     ax.plot(x_val, val_accuracies_avg, color="tab:green", label="Val Accuracy")
+    ax.plot(x_main, train_accuracies_avg, color="tab:orange", label="Train Accuracy")
 
-    ax.set_title("Train/Val Accuracy{}".format(" (train smoothed)" if smooth else " (20-step averages)"))
+    ax.set_title("Train/Val Accuracy{}".format(" (smoothed)" if smooth else " (20-step averages)"))
     ax.legend(loc="upper left", bbox_to_anchor=(0.05, 0.95))
 
     fig.savefig("{}_training_curve.png".format(output_prefix), dpi=100, bbox_inches="tight")

@@ -7,10 +7,10 @@ def configure_float32_matmul_precision():
     if torch.cuda.is_available():
         torch.set_float32_matmul_precision('high')
 
-def main(math=True):
+def main():
     configure_float32_matmul_precision()
-    parser = argparse.ArgumentParser(description="Generate math answers using trained GRPO model.")
-    parser.add_argument("question", type=str, help="The math question to answer (e.g., 'What is 5 + 3?')")
+    parser = argparse.ArgumentParser(description="Generate countdown answers using trained GRPO model.")
+    parser.add_argument("question", type=str, help="The countdown question (e.g., 'Using the numbers [2, 5, 8, 12], create an expression that equals 17')")
     args = parser.parse_args()
 
     # Load model and tokenizer
@@ -25,10 +25,12 @@ def main(math=True):
     model.to(device)
 
     # Format prompt
-    if math:
-        prompt = f"User: {args.question} Answer in <answer>...</answer>. \nAssistant:"
-    else:
-        prompt = f"User: {args.question} \nAssistant:"
+    prompt = (
+        f"User: {args.question} "
+        f"Each number can be used at most once. Available operations: +, -, *. "
+        f"Show your work step by step, then give your final expression in <answer>...</answer>.\n"
+        f"Assistant:"
+    )
 
     # Tokenize
     inputs = tokenizer(prompt, return_tensors="pt").to(device)
@@ -37,7 +39,7 @@ def main(math=True):
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
-            max_new_tokens=32,
+            max_new_tokens=128,
             do_sample=True,
             temperature=1.0,
             pad_token_id=tokenizer.pad_token_id
@@ -51,4 +53,4 @@ def main(math=True):
     print(f"Generated: {completion}")
 
 if __name__ == "__main__":
-    main(math=False)
+    main()

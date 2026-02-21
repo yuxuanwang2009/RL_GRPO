@@ -6,6 +6,7 @@ import random
 import re
 import os
 import json
+import ast
 from collections import deque
 from plot_metrics import plot_metrics
 
@@ -24,7 +25,7 @@ class GRPOConfig:
     batch_size: int = 4
     val_batch_size: int = 32
     num_generations: int = 16
-    max_new_tokens: int = 64 # Raised from 16 — critical for chain-of-thought reasoning
+    max_new_tokens: int = 128 # Raised for countdown task chain-of-thought reasoning
     num_iterations: int = 1200
     
     # PPO/GRPO
@@ -36,33 +37,52 @@ class GRPOConfig:
 cfg = GRPOConfig()
 
 # -----------------------------------------------------------------------------
-# Task: Multi-step Arithmetic
-# Task: "What is (X op1 Y) op2 Z?" with order of operations
-# Reward: +0.0 for <answer>...</answer> format, +0.0 if within ±1, +1.0 if exact
+# Task: Countdown
+# Given a set of numbers, find an expression using +, -, * that equals a target.
+# Reward: +1.0 if the expression evaluates to the target using only available numbers.
 # -----------------------------------------------------------------------------
 def get_prompt(split="train"):
     # Hidden split rule:
-    # train -> at least one of a, b, c is odd
-    # val   -> all of a, b, c are even
+    # train -> at least one of the 4 numbers is odd
+    # val   -> all 4 numbers are even
     if split not in {"train", "val"}:
         raise ValueError("split must be 'train' or 'val'")
 
     while True:
-        a = random.randint(50, 70)
-        b = random.randint(50, 70)
-        c = random.randint(50, 70)
-        if split == "train" and ((a % 2 == 1) or (b % 2 == 1) or (c % 2 == 1)):
-            break
-        if split == "val" and ((a % 2 == 0) and (b % 2 == 0) and (c % 2 == 0)):
+        nums = [random.randint(1, 25) for _ in range(4)]
+
+        all_even = all(n % 2 == 0 for n in nums)
+        if split == "train" and all_even:
+            continue
+        if split == "val" and not all_even:
+            continue
+
+        # Generate a solvable target from 2-3 of the numbers
+        ops = ['+', '-', '*']
+        k = random.choice([2, 3])
+        chosen = random.sample(nums, k)
+
+        if k == 2:
+            op = random.choice(ops)
+            target = eval(f"{chosen[0]} {op} {chosen[1]}")
+        else:
+            op1 = random.choice(ops)
+            op2 = random.choice(ops)
+            target = eval(f"({chosen[0]} {op1} {chosen[1]}) {op2} {chosen[2]}")
+
+        # Filter for reasonable positive targets
+        if 1 <= target <= 999:
             break
 
-    op1 = random.choice(['+', '-', '*'])
-    op2 = random.choice(['+', '-', '*'])
-    
-    expression = f"({a} {op1} {b}) {op2} {c}"
-    answer = eval(expression)  # Safe since controlled input
-    text = f"User: What is {expression}? Think step by step, then put your final answer in <answer>...</answer>.\nAssistant:"
-    return text, str(answer)
+    random.shuffle(nums)
+    answer_data = json.dumps({"target": target, "nums": nums})
+    text = (
+        f"User: Using the numbers {nums}, create an expression that equals {target}. "
+        f"Each number can be used at most once. Available operations: +, -, *. "
+        f"Show your work step by step, then give your final expression in <answer>...</answer>.\n"
+        f"Assistant:"
+    )
+    return text, answer_data
 
 
 def evaluate_accuracy(model, tokenizer, prompts, answers, device, max_new_tokens):
@@ -83,32 +103,62 @@ def evaluate_accuracy(model, tokenizer, prompts, answers, device, max_new_tokens
     _, accuracy_list = reward_function(completions_text, answers)
     return sum(accuracy_list) / len(accuracy_list) if accuracy_list else 0.0
 
+def safe_eval(expr_str):
+    """Safely evaluate a mathematical expression containing only +, -, *."""
+    try:
+        tree = ast.parse(expr_str.strip(), mode='eval')
+    except SyntaxError:
+        return None
+
+    allowed = (ast.Expression, ast.BinOp, ast.UnaryOp, ast.Constant,
+               ast.Add, ast.Sub, ast.Mult, ast.USub)
+    for node in ast.walk(tree):
+        if not isinstance(node, allowed):
+            return None
+
+    try:
+        return eval(compile(tree, '<string>', 'eval'))
+    except Exception:
+        return None
+
+def extract_numbers(expr_str):
+    """Extract all integer literals from an expression string."""
+    return [int(x) for x in re.findall(r'\d+', expr_str)]
+
 def reward_function(completions, answers):
     rewards = []
     accuracies = []
-    
-    for completion, correct_ans in zip(completions, answers):
+
+    for completion, answer_json in zip(completions, answers):
         r = 0.0
         acc = 0.0
-        correct = int(correct_ans)
+        info = json.loads(answer_json)
+        target = info["target"]
+        available = sorted(info["nums"])
 
         if match := re.search(r'<answer>(.*?)</answer>', completion):
-            answer_text = match.group(1).strip()
-            r += 0.0
-            
-            try:
-                pred = int(answer_text)
-                if abs(pred - correct) <= 1:
-                    r += 0.0
-                if pred == correct:
-                    r += 1.0
+            expr = match.group(1).strip()
+            result = safe_eval(expr)
+
+            if result is not None and result == target:
+                # Verify only available numbers are used (each at most once)
+                used = sorted(extract_numbers(expr))
+                pool = available.copy()
+                valid = True
+                for n in used:
+                    if n in pool:
+                        pool.remove(n)
+                    else:
+                        valid = False
+                        break
+
+                if valid:
+                    r = 1.0
                     acc = 1.0
-            except ValueError:
-                pass  # Not a number, no extra reward
-        
+
         rewards.append(r)
         accuracies.append(acc)
-        
+
     return rewards, accuracies
 
 

@@ -1,6 +1,7 @@
 import torch
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
+import bitsandbytes as bnb
 from dataclasses import dataclass
 import random
 import re
@@ -17,15 +18,15 @@ from plot_metrics import plot_metrics
 @dataclass
 class GRPOConfig:
     # Model
-    model_name: str = "Qwen/Qwen2.5-0.5B-Instruct"
+    model_name: str = "Qwen/Qwen2.5-1.5B-Instruct"
     device: str = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
     
     # Training
     learning_rate: float = 2e-6 # Raised from 1e-7 — model needs stronger signal to learn reasoning patterns
     batch_size: int = 4
-    val_batch_size: int = 32
+    val_batch_size: int = 16
     num_generations: int = 16
-    max_new_tokens: int = 128 # Raised for countdown task chain-of-thought reasoning
+    max_new_tokens: int = 160 # Raised for countdown task chain-of-thought reasoning
     num_iterations: int = 1200
     
     # PPO/GRPO
@@ -41,15 +42,30 @@ cfg = GRPOConfig()
 # Given a set of numbers, find an expression using +, -, * that equals a target.
 # Reward: +1.0 if the expression evaluates to the target using only available numbers.
 # -----------------------------------------------------------------------------
-def get_prompt(split="train"):
+_EXAMPLE_Q = (
+    "Using the numbers [3, 5, 2], create an expression that equals 13. "
+    "You must use all 3 numbers, each exactly once. Available operations: +, -, * (no division). "
+    "Show your reasoning in <think>...</think>, then write only the bare expression in <answer>...</answer>."
+)
+_EXAMPLE_A = (
+    "<think>\n"
+    "I need to reach 13 using [3, 5, 2].\n"
+    "Try 3 + 5 + 2 = 10. Too small, need multiplication.\n"
+    "Try 3 * 5 + 2 = 17. Too large.\n"
+    "Try 5 * 2 + 3 = 13. Yes!\n"
+    "</think>\n"
+    "<answer>5 * 2 + 3</answer>"
+)
+
+def get_prompt(split="train", tokenizer=None):
     # Hidden split rule:
-    # train -> at least one of the 4 numbers is odd
-    # val   -> all 4 numbers are even
+    # train -> at least one of the 3 numbers is odd
+    # val   -> all 3 numbers are even
     if split not in {"train", "val"}:
         raise ValueError("split must be 'train' or 'val'")
 
     while True:
-        nums = [random.randint(1, 25) for _ in range(4)]
+        nums = [random.randint(1, 10) for _ in range(3)]
 
         all_even = all(n % 2 == 0 for n in nums)
         if split == "train" and all_even:
@@ -57,31 +73,33 @@ def get_prompt(split="train"):
         if split == "val" and not all_even:
             continue
 
-        # Generate a solvable target from 2-3 of the numbers
+        # Generate a solvable target using all 3 numbers
         ops = ['+', '-', '*']
-        k = random.choice([2, 3])
-        chosen = random.sample(nums, k)
+        op1 = random.choice(ops)
+        op2 = random.choice(ops)
+        target = eval(f"({nums[0]} {op1} {nums[1]}) {op2} {nums[2]}")
 
-        if k == 2:
-            op = random.choice(ops)
-            target = eval(f"{chosen[0]} {op} {chosen[1]}")
-        else:
-            op1 = random.choice(ops)
-            op2 = random.choice(ops)
-            target = eval(f"({chosen[0]} {op1} {chosen[1]}) {op2} {chosen[2]}")
-
-        # Filter for reasonable positive targets
-        if 1 <= target <= 999:
+        # Filter for reasonable positive targets; exclude trivial cases where target is already in nums
+        if 1 <= target <= 100 and target not in nums:
             break
 
     random.shuffle(nums)
     answer_data = json.dumps({"target": target, "nums": nums})
-    text = (
-        f"User: Using the numbers {nums}, create an expression that equals {target}. "
-        f"Each number can be used at most once. Available operations: +, -, *. "
-        f"Show your work step by step, then give your final expression in <answer>...</answer>.\n"
-        f"Assistant:"
+    question = (
+        f"Using the numbers {nums}, create an expression that equals {target}. "
+        f"You must use all 3 numbers. Available operations: +, -, *. "
+        f"Show your reasoning in <think>...</think>, then write only the bare expression in <answer>...</answer>."
     )
+    if tokenizer is not None:
+        messages = [
+            {"role": "system", "content": "You are a mathematical puzzle solver."},
+            {"role": "user", "content": _EXAMPLE_Q},
+            {"role": "assistant", "content": _EXAMPLE_A},
+            {"role": "user", "content": question},
+        ]
+        text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    else:
+        text = f"User: {question}\nAssistant:"
     return text, answer_data
 
 
@@ -90,6 +108,9 @@ def evaluate_accuracy(model, tokenizer, prompts, answers, device, max_new_tokens
     inputs = tokenizer(prompts, return_tensors="pt", padding=True).to(device)
     prompt_len = inputs.input_ids.shape[1]
 
+    model.gradient_checkpointing_disable()
+    model.config.use_cache = True
+    model.eval()
     with torch.no_grad():
         sequences = model.generate(
             input_ids=inputs.input_ids,
@@ -98,6 +119,9 @@ def evaluate_accuracy(model, tokenizer, prompts, answers, device, max_new_tokens
             do_sample=False,
             pad_token_id=tokenizer.pad_token_id
         )
+    model.config.use_cache = False
+    model.train()
+    model.gradient_checkpointing_enable()
 
     completions_text = tokenizer.batch_decode(sequences[:, prompt_len:], skip_special_tokens=True)
     _, accuracy_list = reward_function(completions_text, answers)
@@ -136,12 +160,17 @@ def reward_function(completions, answers):
         target = info["target"]
         available = sorted(info["nums"])
 
+        # Format rewards: +0.1 each for <think> and <answer> tags
+        has_think = bool(re.search(r'<think>.*?</think>', completion, re.DOTALL))
+        has_answer = bool(re.search(r'<answer>.*?</answer>', completion, re.DOTALL))
+        r += 0.1 * has_think + 0.1 * has_answer
+
         if match := re.search(r'<answer>(.*?)</answer>', completion):
             expr = match.group(1).strip()
             result = safe_eval(expr)
 
             if result is not None and result == target:
-                # Verify only available numbers are used (each at most once)
+                # Verify all available numbers are used, each exactly once
                 used = sorted(extract_numbers(expr))
                 pool = available.copy()
                 valid = True
@@ -152,8 +181,8 @@ def reward_function(completions, answers):
                         valid = False
                         break
 
-                if valid:
-                    r = 1.0
+                if valid and len(pool) == 0:  # all numbers consumed
+                    r = 1.0  # Full reward overwrites format partial credit
                     acc = 1.0
 
         rewards.append(r)
@@ -195,16 +224,17 @@ def main():
     policy = AutoModelForCausalLM.from_pretrained(
         model_path,
         attn_implementation=attn_impl,
-        torch_dtype=torch.bfloat16,
+        dtype=torch.bfloat16,
         trust_remote_code=True
     ).to(cfg.device)
     policy.train()
+    policy.gradient_checkpointing_enable()
 
     # Reference, used for KL divergence
     ref = AutoModelForCausalLM.from_pretrained(
         model_path,
         attn_implementation=attn_impl,
-        torch_dtype=torch.bfloat16,
+        dtype=torch.bfloat16,
         trust_remote_code=True # needed for Qwen because it has some custom code
     ).to(cfg.device)
     ref.eval() # eval mode turns off dropout but not gradients. gradients off next.
@@ -222,7 +252,8 @@ def main():
 
         
     # AdamW basically adopts a non-Euclidean geometry in the parameter space, ensuring isotropy of gradient std.
-    optimizer = torch.optim.AdamW(policy.parameters(), lr=cfg.learning_rate)
+    # 8-bit AdamW quantizes optimizer m/v states to 8-bit, saving ~6 GB for a 1.5B model.
+    optimizer = bnb.optim.AdamW8bit(policy.parameters(), lr=cfg.learning_rate)
     
     # Recent metrics for averaging, using a deque for efficient popping from left and appending to right
     recent_rewards = deque(maxlen=20)
@@ -237,16 +268,16 @@ def main():
     
     print("Starting Training...")
     for step in range(cfg.num_iterations):
-        # Update reference model periodically to allow continued improvement
-        if step % 200 == 0 and step > 0:
-            print(f"Step {step}: Updating reference model to current policy.")
-            ref.load_state_dict(policy.state_dict())
+        # # Update reference model periodically to allow continued improvement
+        # if step % 200 == 0 and step > 0:
+        #     print(f"Step {step}: Updating reference model to current policy.")
+        #     ref.load_state_dict(policy.state_dict())
 
         # 1. Generate Batch
         prompts = []
         answers = []
         for _ in range(cfg.batch_size):
-            p, a = get_prompt(split="train")
+            p, a = get_prompt(split="train", tokenizer=tokenizer)
             prompts.append(p)
             answers.append(a)
             
@@ -256,12 +287,15 @@ def main():
         
         # Sampling
         # Generate completions for get_logprobs on these completions later. get_logprobs is batched so more efficient. right now, no grad needed.
+        policy.gradient_checkpointing_disable()
+        policy.config.use_cache = True
+        policy.eval()
         with torch.no_grad():
             # batch_size prompts, each prompt has num_generations repetitions
             input_ids_expanded = inputs.input_ids.repeat_interleave(cfg.num_generations, dim=0)
             # attention mask masks the padding tokens
             attn_mask_expanded = inputs.attention_mask.repeat_interleave(cfg.num_generations, dim=0)
-            
+
             sequences = policy.generate(
                 input_ids=input_ids_expanded,
                 attention_mask=attn_mask_expanded,
@@ -273,6 +307,9 @@ def main():
                 repetition_penalty=1.0,  # disable repetition penalty
                 pad_token_id=tokenizer.pad_token_id
             )
+        policy.config.use_cache = False  # must be False before gradient_checkpointing_enable() to suppress warning
+        policy.train()
+        policy.gradient_checkpointing_enable()
 
         # Note: The returned sequences are padded to the longest sequence in the batch.
         # If some sequences stop early (e.g., generate EOS), they are right-padded with pad_token_id
@@ -304,8 +341,8 @@ def main():
         with torch.no_grad(): # No grad for ref and old policy
             ref_logprobs = get_batch_logprobs(ref, back_input_ids, prompt_len)
             # the only difference between old and new policy is torch.no_grad() when cfg.num_inner_updates = 1.
-            old_logprobs = get_batch_logprobs(policy, back_input_ids, prompt_len) 
-            
+            old_logprobs = get_batch_logprobs(policy, back_input_ids, prompt_len)
+
         for _ in range(cfg.num_inner_updates): # multiple GRPO updates with the old model fixed.
             curr_logprobs = get_batch_logprobs(policy, back_input_ids, prompt_len)
             
@@ -347,7 +384,7 @@ def main():
             val_prompts = []
             val_answers = []
             for _ in range(cfg.val_batch_size):
-                p, a = get_prompt(split="val")
+                p, a = get_prompt(split="val", tokenizer=tokenizer)
                 val_prompts.append(p)
                 val_answers.append(a)
             val_acc = evaluate_accuracy(
@@ -359,8 +396,9 @@ def main():
                 cfg.max_new_tokens
             )
 
+            print("="*50)
             print(f"Last 20 steps avg: Reward={avg_reward_20:.2f}, TrainAcc={train_acc_20:.2f}, ValAcc={val_acc:.2f}, Loss={avg_loss_20:.4f}, KL={avg_kl_20:.4f}")
-            print(f"  Prompt: {prompts[0]}")
+            # print(f"  Prompt: {prompts[0]}")
             print(f"  Completion: {completions_text[0]}")
             
             # Plotting Update

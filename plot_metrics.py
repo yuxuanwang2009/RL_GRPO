@@ -62,7 +62,7 @@ def plot_metrics(metrics_data, smooth=False, output_prefix="grpo", verbose=False
     ax_kl.plot(x_main, kl_avg, color="tab:red", label="KL Divergence")
     ax_kl.set_xlabel("Step (x10)")
     ax_kl.set_ylabel("KL Divergence", color="tab:red")
-    ax_kl.set_ylim(0, 4)
+    ax_kl.set_ylim(0, max(kl_avg) * 1.1 if kl_avg else 1)
     ax_kl.tick_params(axis='y', labelcolor="tab:red")
     ax_kl.set_title("KL Divergence over Training{}".format(" (smoothed)" if smooth else ""))
     ax_kl.legend(loc="upper left")

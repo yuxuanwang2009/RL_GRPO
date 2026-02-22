@@ -3,52 +3,58 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 import argparse
 
 
-def configure_float32_matmul_precision():
-    if torch.cuda.is_available():
-        torch.set_float32_matmul_precision('high')
+_EXAMPLE_Q = (
+    "Using the numbers [3, 5, 2], create an expression that equals 13. "
+    "You must use all 3 numbers, each exactly once. Available operations: +, -, * (no division). "
+    "Show your reasoning in <think>...</think>, then write only the bare expression in <answer>...</answer>."
+)
+_EXAMPLE_A = (
+    "<think>\n"
+    "I need to reach 13 using [3, 5, 2].\n"
+    "Try 3 + 5 + 2 = 10. Too small, need multiplication.\n"
+    "Try 3 * 5 + 2 = 17. Too large.\n"
+    "Try 5 * 2 + 3 = 13. Yes!\n"
+    "</think>\n"
+    "<answer>5 * 2 + 3</answer>"
+)
+
 
 def main():
-    configure_float32_matmul_precision()
     parser = argparse.ArgumentParser(description="Generate countdown answers using trained GRPO model.")
-    parser.add_argument("question", type=str, help="The countdown question (e.g., 'Using the numbers [2, 5, 8, 12], create an expression that equals 17')")
+    parser.add_argument("question", type=str,
+                        help="e.g. 'Using the numbers [4, 7, 3], create an expression that equals 25.'")
+    parser.add_argument("--model_path", type=str, default="saved_model")
+    parser.add_argument("--no_oneshot", action="store_true", help="Skip one-shot example")
     args = parser.parse_args()
 
-    # Load model and tokenizer
-    model_path = "saved_model"
-    model = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32, trust_remote_code=True)
-    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    model = AutoModelForCausalLM.from_pretrained(
+        args.model_path, dtype=torch.bfloat16, trust_remote_code=True
+    )
+    tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
 
-    model.eval()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
+    model.eval()
 
-    # Format prompt
-    prompt = (
-        f"User: {args.question} "
-        f"Each number can be used at most once. Available operations: +, -, *. "
-        f"Show your work step by step, then give your final expression in <answer>...</answer>.\n"
-        f"Assistant:"
-    )
+    messages = [{"role": "system", "content": "You are a mathematical puzzle solver."}]
+    if not args.no_oneshot:
+        messages.append({"role": "user", "content": _EXAMPLE_Q})
+        messages.append({"role": "assistant", "content": _EXAMPLE_A})
+    messages.append({"role": "user", "content": args.question})
 
-    # Tokenize
+    prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     inputs = tokenizer(prompt, return_tensors="pt").to(device)
+    prompt_len = inputs.input_ids.shape[1]
 
-    # Generate
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
-            max_new_tokens=128,
-            do_sample=True,
-            temperature=1.0,
+            max_new_tokens=160,
+            do_sample=False,
             pad_token_id=tokenizer.pad_token_id
         )
 
-    # Decode and extract answer
-    generated = tokenizer.decode(outputs[0], skip_special_tokens=True)
-    completion = generated[len(prompt):].strip()
-
+    completion = tokenizer.decode(outputs[0][prompt_len:], skip_special_tokens=True)
     print(f"Question: {args.question}")
     print(f"Generated: {completion}")
 

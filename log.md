@@ -125,27 +125,71 @@ Compare three training configurations on 3-number countdown, all starting from b
 |---|---|---|
 | p2_zs | zero-shot | Zero-shot only. Baseline from Part I findings. |
 | p2_os | one-shot | One-shot only. CoT example provided every step. |
-| p2_mix | half-shot | Linear decay: 100% one-shot at step 0, 0% at step 1200. Per-batch coin flip. |
+| p2_halfshot | half-shot | Linear decay: 100% one-shot at step 0, 0% at step 1200. Per-batch coin flip. |
 
 **Questions:**
 1. Does one-shot CoT scaffolding help training accuracy vs zero-shot?
 2. Does alternating (half-shot) get the best of both — learning reasoning from the example while forcing generalization on zero-shot steps?
 3. At eval time, how do all three perform on both one-shot and zero-shot prompts? Does half-shot training produce better zero-shot transfer than pure one-shot?
 
-## Eval 6: p2_think preliminary (3-number, seed=142, n=100)
+## Eval 6: p2_zeroshot and p2_halfshot (3-number, seed=142, n=200)
 
-p2_think: zero-shot trained, 1200 steps, prompt mentions <think> but no <think> format reward, max_new_tokens=160. Note: R1 (Part I) had +0.1 format reward for <think>; p2_think does not. The model learned to output literal <think>...</think> (copying the prompt instruction) then <answer>expr</answer> — no genuine reasoning.
+All models: 1200 steps, max_new_tokens=160, +0.1 format reward for both <think> and <answer>.
+- p2_zeroshot: pure zero-shot training.
+- p2_halfshot: linear decay from 100% one-shot at step 0 to 0% at step 1200. Per-batch coin flip.
 
-| Model | Prompt | Numbers | Correct | Accuracy |
-|---|---|---|---|---|
-| R1 (Part I) | one-shot | 3 | 69/100 | 69.0% |
-| R1 (Part I) | zero-shot | 3 | 3/100 | 3.0% |
-| p2_think | one-shot | 3 | 32/100 | 32.0% |
-| p2_think | zero-shot | 3 | 39/100 | 39.0% |
+| Model | Training | Prompt | Numbers | Correct | Accuracy |
+|---|---|---|---|---|---|
+| R1 (Part I) | one-shot | one-shot | 3 | 69/100 | 69.0% |
+| R1 (Part I) | one-shot | zero-shot | 3 | 3/100 | 3.0% |
+| p2_zeroshot | zero-shot | one-shot | 3 | 76/200 | 38.0% |
+| p2_zeroshot | zero-shot | zero-shot | 3 | 75/200 | 37.5% |
+| p2_halfshot | half-shot | one-shot | 3 | 121/200 | 60.5% |
+| p2_halfshot | half-shot | zero-shot | 3 | 68/200 | 34.0% |
 
 **Takeaways:**
-- **Zero-shot > one-shot for p2_think** (39% vs 32%) — the inverse of R1 (69% vs 3%). Each model performs best on its training distribution.
-- **One-shot example hurts p2_think.** The example shows genuine CoT reasoning, but the model learned to skip CoT. The example pushes it toward a generation pattern it wasn't optimized for.
-- **Zero-shot accuracy (39%) comparable to Base+ZS200 (35%)** from Part I, despite 1200 steps vs 200. The <think> mention in the prompt and extra tokens (160 vs 160) didn't significantly help — the model just ignored <think>.
-- **CoT remains unused for 3-number problems** regardless of whether it's mentioned in the prompt. The model rationally skips reasoning tokens since they don't improve accuracy enough to justify the cost.
+- **Both skills saturate early.** Zero-shot: 35% at 200 steps (Part I), 34–37.5% at 600–1200 steps. One-shot: 60.5% at ~600 batches vs 69% at 1200. Diminishing returns in both cases.
+- **One-shot and zero-shot are largely independent skills at 1.5B scale.** Interleaving does not force shared representations. The model learns separate prompt-specific behaviors. There may be some shared learning (both directions show slightly better than half-budget performance), but the effect is small and confounded by early saturation.
+
+## Eval 7: Natural language prompts (3-number, seed=142, n=200)
+
+Tests whether training strategy affects generalization to natural language prompts with no format tags. Answer extracted by finding the last valid math expression in output.
+
+| Model | Training | Prompt | Numbers | Correct | Accuracy |
+|---|---|---|---|---|---|
+| Base (Part I) | — | natural | 3 | 6/100 | 6.0% |
+| Base+ZS200 (Part I) | zero-shot | natural | 3 | 21/100 | 21.0% |
+| p2_zeroshot | zero-shot | natural | 3 | 33/200 | 16.5% |
+| p2_halfshot | half-shot | natural | 3 | 33/200 | 16.5% |
+
+**Takeaways:**
+- **Identical natural language performance.** p2_zeroshot and p2_halfshot both get 16.5%. One-shot exposure in p2_halfshot did not help or hurt generalization to unstructured prompts.
+- **Both improve over base (6%)** but are below Base+ZS200 (21%) from Part I. The difference may be due to eval sample size (n=100 vs n=200) or other training differences.
+- **Format-specific skills don't transfer to natural prompts.** The gap between tagged eval (~34–38%) and natural eval (16.5%) shows the models rely heavily on `<answer>` tags for structured output.
+- **Nevertheless, half-shot training yields well-balanced results.** p2_halfshot matches p2_zeroshot on both zero-shot (34% vs 37.5%) and natural (16.5% vs 16.5%) prompts, while being substantially better on one-shot (60.5% vs 38%). It's the only model that performs reasonably across all prompt types.
+
+---
+
+# Part III: Are 1200 steps too long?
+
+Part II showed that p2_zeroshot (1200 steps) underperformed Base+ZS200 (Part I, 200 steps) on one-shot and natural prompts despite training longer. Hypothesis: longer training overfits to the training prompt format, hurting cross-format generalization.
+
+## Eval 8: p2_zeroshot_200 vs p2_zeroshot (3-number, seed=142, n=200)
+
+Both models: pure zero-shot training, +0.1 format reward for both <think> and <answer>, max_new_tokens=160. Only difference is training steps.
+
+| Model | Steps | Prompt | Numbers | Correct | Accuracy |
+|---|---|---|---|---|---|
+| p2_zeroshot_200 | 200 | one-shot | 3 | 103/200 | 51.5% |
+| p2_zeroshot_200 | 200 | zero-shot | 3 | 58/200 | 29.0% |
+| p2_zeroshot_200 | 200 | natural | 3 | 44/200 | 22.0% |
+| p2_zeroshot | 1200 | one-shot | 3 | 76/200 | 38.0% |
+| p2_zeroshot | 1200 | zero-shot | 3 | 75/200 | 37.5% |
+| p2_zeroshot | 1200 | natural | 3 | 33/200 | 16.5% |
+
+**Takeaways:**
+- **Longer training hurts generalization.** 200 steps beats 1200 steps on one-shot (51.5% vs 38%) and natural (22% vs 16.5%), despite 1200 steps being better on zero-shot (37.5% vs 29%).
+- **Early training builds general skill, late training overfits.** The first 200 steps improve arithmetic broadly across all prompt formats. The remaining 1000 steps only improve the training distribution (zero-shot tagged) while degrading other formats.
+- **Confirms Part I.** p2_zeroshot_200 closely matches Base+ZS200 from Part I (51.5% vs 56% one-shot, 29% vs 35% zero-shot, 22% vs 21% natural), validating those earlier results.
+- **Training reward is misleading.** The reward continues to increase from step 200 to 1200, but this reflects overfitting to the prompt format, not genuine improvement in arithmetic ability.
 

@@ -25,6 +25,7 @@ def parse_args():
     parser.add_argument("--epsilon", type=float, default=None)
     parser.add_argument("--num_count", type=int, default=None, help="Numbers per problem (default: 3)")
     parser.add_argument("--oneshot", action="store_true", default=None, help="Include one-shot example in prompt")
+    parser.add_argument("--mix_oneshot", type=float, default=None, help="Fraction of prompts with one-shot (0.0-1.0)")
     return parser.parse_args()
 
 
@@ -32,7 +33,7 @@ def apply_overrides(cfg, args):
     override_fields = [
         "learning_rate", "beta", "temperature", "num_iterations",
         "max_new_tokens", "num_generations", "batch_size", "val_batch_size",
-        "epsilon", "num_count", "oneshot", "run_name",
+        "epsilon", "num_count", "oneshot", "mix_oneshot", "run_name",
     ]
     for name in override_fields:
         val = getattr(args, name, None)

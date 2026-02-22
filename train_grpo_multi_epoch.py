@@ -40,6 +40,7 @@ class GRPOConfig:
     # Task
     num_count: int = 3
     oneshot: bool = False
+    mix_oneshot: float = 0.0  # fraction of prompts that get one-shot (0.0 = all zero-shot, 0.5 = 50/50)
 
     # Run management
     run_name: str = "grpo"
@@ -48,7 +49,7 @@ class GRPOConfig:
 _EXAMPLE_Q = (
     "Using the numbers [3, 5, 2], create an expression that equals 13. "
     "You must use all 3 numbers, each exactly once. Available operations: +, -, * (no division). "
-    "Show your reasoning in <think>...</think>, then write only the bare expression in <answer>...</answer>."
+    "Show your reasoning in <think>...</think>, then write your final expression in <answer>...</answer>."
 )
 _EXAMPLE_A = (
     "<think>\n"
@@ -99,7 +100,7 @@ def get_prompt(split="train", tokenizer=None, num_count=3, oneshot=False):
     question = (
         f"Using the numbers {nums}, create an expression that equals {target}. "
         f"You must use all {num_count} numbers, each exactly once. Available operations: +, -, * (no division). "
-        f"Show your reasoning in <think>...</think>, then write only the bare expression in <answer>...</answer>."
+        f"Show your reasoning in <think>...</think>, then write your final expression in <answer>...</answer>."
     )
     if tokenizer is not None:
         messages = [
@@ -172,10 +173,11 @@ def reward_function(completions, answers):
         target = info["target"]
         available = sorted(info["nums"])
 
-        # Format rewards: +0.1 each for <think> and <answer> tags
+        # Format reward: +0.1 for <think> tag, +0.1 for <answer> tag
         has_think = bool(re.search(r'<think>.*?</think>', completion, re.DOTALL))
         has_answer = bool(re.search(r'<answer>.*?</answer>', completion, re.DOTALL))
-        r += 0.1 * has_think + 0.1 * has_answer
+        r += 0.1 * has_think
+        r += 0.1 * has_answer
 
         if match := re.search(r'<answer>(.*?)</answer>', completion):
             expr = match.group(1).strip()
@@ -301,8 +303,14 @@ def main():
         # 1. Generate Batch
         prompts = []
         answers = []
+        # Decide one-shot vs zero-shot for entire batch (avoids padding waste)
+        if cfg.mix_oneshot > 0:
+            oneshot_prob = 1.0 - step / (cfg.num_iterations - 1)
+            batch_oneshot = random.random() < oneshot_prob
+        else:
+            batch_oneshot = cfg.oneshot
         for _ in range(cfg.batch_size):
-            p, a = get_prompt(split="train", tokenizer=tokenizer, num_count=cfg.num_count, oneshot=cfg.oneshot)
+            p, a = get_prompt(split="train", tokenizer=tokenizer, num_count=cfg.num_count, oneshot=batch_oneshot)
             prompts.append(p)
             answers.append(a)
 
@@ -398,7 +406,7 @@ def main():
             val_prompts = []
             val_answers = []
             for _ in range(cfg.val_batch_size):
-                p, a = get_prompt(split="val", tokenizer=tokenizer, num_count=cfg.num_count, oneshot=cfg.oneshot)
+                p, a = get_prompt(split="val", tokenizer=tokenizer, num_count=cfg.num_count, oneshot=batch_oneshot)
                 val_prompts.append(p)
                 val_answers.append(a)
             val_acc = evaluate_accuracy(

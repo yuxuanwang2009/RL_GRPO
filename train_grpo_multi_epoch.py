@@ -208,14 +208,18 @@ def reward_function(completions, answers):
 # -----------------------------------------------------------------------------
 # Helper Functions
 # -----------------------------------------------------------------------------
-def get_batch_logprobs(model, input_ids, prompt_len):
-    outputs = model(input_ids)
-    logits = outputs.logits
-    shift_logits = logits[:, :-1, :]
-    shift_labels = input_ids[:, 1:]
-    log_probs = F.log_softmax(shift_logits, dim=-1)
-    chosen_log_probs = torch.gather(log_probs, -1, shift_labels.unsqueeze(-1)).squeeze(-1)
-    return chosen_log_probs[:, prompt_len-1:]
+def get_batch_logprobs(model, input_ids, prompt_len, chunk_size=32):
+    chunks = []
+    for i in range(0, input_ids.size(0), chunk_size):
+        chunk_ids = input_ids[i:i+chunk_size]
+        outputs = model(chunk_ids)
+        logits = outputs.logits
+        shift_logits = logits[:, :-1, :]
+        shift_labels = chunk_ids[:, 1:]
+        log_probs = F.log_softmax(shift_logits, dim=-1)
+        chosen_log_probs = torch.gather(log_probs, -1, shift_labels.unsqueeze(-1)).squeeze(-1)
+        chunks.append(chosen_log_probs[:, prompt_len-1:])
+    return torch.cat(chunks, dim=0)
 
 # -----------------------------------------------------------------------------
 # Main Loop

@@ -15,26 +15,18 @@ def load_metrics(json_path="grpo_metrics.json"):
 
 def plot_metrics(metrics_data, smooth=False, output_prefix="grpo", verbose=False):
     """Plot training metrics and save to PNG files."""
-    if "train_accuracies_avg" in metrics_data and "val_accuracies_avg" in metrics_data:
-        train_accuracies_avg = metrics_data["train_accuracies_avg"]
-        val_accuracies_avg = metrics_data["val_accuracies_avg"]
-    else:
-        # Backward compatibility with older metrics format
-        train_accuracies_avg = metrics_data["accuracies_avg"]
-        val_accuracies_avg = metrics_data["accuracies_avg"]
+    train_accuracies_avg = metrics_data.get("train_accuracies_avg", metrics_data.get("accuracies_avg", []))
+    val_accuracies_avg = metrics_data.get("val_accuracies_avg", {})
     kl_avg = metrics_data["kl_avg"]
 
     window = 10
+    x_offset = 0
     if smooth:
         if len(train_accuracies_avg) >= window:
             train_accuracies_avg = moving_average(train_accuracies_avg, window)
-        if len(val_accuracies_avg) >= window:
-            val_accuracies_avg = moving_average(val_accuracies_avg, window)
         if len(kl_avg) >= window:
             kl_avg = moving_average(kl_avg, window)
         x_offset = max(0, window - 1) if len(metrics_data.get("kl_avg", [])) >= window else 0
-    else:
-        x_offset = 0
 
     # Plot 1: Accuracy
     fig, ax = plt.subplots()
@@ -43,14 +35,32 @@ def plot_metrics(metrics_data, smooth=False, output_prefix="grpo", verbose=False
     ax.set_ylim(0, 1)
 
     x_train_offset = x_offset if smooth and len(metrics_data.get("train_accuracies_avg", metrics_data.get("accuracies_avg", []))) >= window else 0
-    x_val_offset = x_offset if smooth and len(metrics_data.get("val_accuracies_avg", metrics_data.get("accuracies_avg", []))) >= window else 0
     x_main = range(x_train_offset, x_train_offset + len(train_accuracies_avg))
-    x_val = range(x_val_offset, x_val_offset + len(val_accuracies_avg))
-    ax.plot(x_val, val_accuracies_avg, color="tab:green", label="Val Accuracy")
     ax.plot(x_main, train_accuracies_avg, color="tab:orange", label="Train Accuracy")
 
+    # val_accuracies_avg can be a dict (new format) or a list (old format)
+    if isinstance(val_accuracies_avg, dict):
+        colors = {"3num_zs": "tab:blue", "3num_os": "tab:green", "natural": "tab:purple", "4num_zs": "tab:cyan", "4num_os": "tab:pink"}
+        labels = {"3num_zs": "Val 3num ZS", "3num_os": "Val 3num OS", "natural": "Val Natural", "4num_zs": "Val 4num ZS", "4num_os": "Val 4num OS"}
+        for key, vals in val_accuracies_avg.items():
+            if len(vals) == 0:
+                continue
+            v = vals
+            if smooth and len(v) >= window:
+                v = moving_average(v, window)
+            xv_offset = x_offset if smooth and len(vals) >= window else 0
+            xv = range(xv_offset, xv_offset + len(v))
+            ax.plot(xv, v, color=colors.get(key, "gray"), label=labels.get(key, key))
+    elif isinstance(val_accuracies_avg, list) and len(val_accuracies_avg) > 0:
+        v = val_accuracies_avg
+        if smooth and len(v) >= window:
+            v = moving_average(v, window)
+        xv_offset = x_offset if smooth and len(val_accuracies_avg) >= window else 0
+        xv = range(xv_offset, xv_offset + len(v))
+        ax.plot(xv, v, color="tab:green", label="Val Accuracy")
+
     ax.set_title("Train/Val Accuracy{}".format(" (smoothed)" if smooth else " (20-step averages)"))
-    ax.legend(loc="upper left", bbox_to_anchor=(0.05, 0.95))
+    ax.legend(loc="upper left", bbox_to_anchor=(0.05, 0.95), fontsize="small")
 
     fig.savefig("{}_training_curve.png".format(output_prefix), dpi=100, bbox_inches="tight")
     plt.close(fig)
@@ -59,7 +69,9 @@ def plot_metrics(metrics_data, smooth=False, output_prefix="grpo", verbose=False
 
     # Plot 2: KL Divergence
     fig_kl, ax_kl = plt.subplots()
-    ax_kl.plot(x_main, kl_avg, color="tab:red", label="KL Divergence")
+    x_kl_offset = x_offset if smooth and len(metrics_data.get("kl_avg", [])) >= window else 0
+    x_kl = range(x_kl_offset, x_kl_offset + len(kl_avg))
+    ax_kl.plot(x_kl, kl_avg, color="tab:red", label="KL Divergence")
     ax_kl.set_xlabel("Step (x10)")
     ax_kl.set_ylabel("KL Divergence", color="tab:red")
     kl_max = max(kl_avg) if len(kl_avg) > 0 else 0
@@ -75,10 +87,13 @@ def plot_metrics(metrics_data, smooth=False, output_prefix="grpo", verbose=False
 def main():
     parser = argparse.ArgumentParser(description="Plot GRPO metrics with optional smoothing.")
     parser.add_argument('--smooth', action='store_true', help='Apply moving average smoothing (window=10)')
+    parser.add_argument('--input', type=str, default="grpo_metrics.json", help='Path to metrics JSON file')
+    parser.add_argument('--prefix', type=str, default=None, help='Output file prefix (default: derived from input)')
     args = parser.parse_args()
 
-    metrics_data = load_metrics()
-    plot_metrics(metrics_data, smooth=args.smooth, verbose=True)
+    metrics_data = load_metrics(args.input)
+    prefix = args.prefix or args.input.replace("_metrics.json", "")
+    plot_metrics(metrics_data, smooth=args.smooth, output_prefix=prefix, verbose=True)
     print("Plotting complete!")
 
 if __name__ == "__main__":

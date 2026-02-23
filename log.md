@@ -193,3 +193,45 @@ Both models: pure zero-shot training, +0.1 format reward for both <think> and <a
 - **Confirms Part I.** p2_zeroshot_200 closely matches Base+ZS200 from Part I (51.5% vs 56% one-shot, 29% vs 35% zero-shot, 22% vs 21% natural), validating those earlier results.
 - **Training reward is misleading.** The reward continues to increase from step 200 to 1200, but this reflects overfitting to the prompt format, not genuine improvement in arithmetic ability.
 
+## Eval 9: p2_halfshot_400 vs p2_halfshot (3-number, seed=142, n=200)
+
+Both models: half-shot training (linear decay from 100% one-shot to 0%), +0.1 format reward for both <think> and <answer>, max_new_tokens=160. Only difference is training steps.
+
+| Model | Steps | Prompt | Numbers | Correct | Accuracy |
+|---|---|---|---|---|---|
+| p2_halfshot_400 | 400 | one-shot | 3 | 108/200 | 54.0% |
+| p2_halfshot_400 | 400 | zero-shot | 3 | 64/200 | 32.0% |
+| p2_halfshot_400 | 400 | natural | 3 | 49/200 | 24.5% |
+| p2_halfshot | 1200 | one-shot | 3 | 121/200 | 60.5% |
+| p2_halfshot | 1200 | zero-shot | 3 | 68/200 | 34.0% |
+| p2_halfshot | 1200 | natural | 3 | 33/200 | 16.5% |
+
+**Takeaways:**
+- **Same overfitting pattern as zero-shot.** 400 steps beats 1200 on natural (24.5% vs 16.5%), while 1200 is only marginally better on one-shot (60.5% vs 54%) and zero-shot (34% vs 32%).
+- **p2_halfshot_400 is the best natural language performer across all experiments** (24.5%), slightly beating p2_zeroshot_200 (22%). Half-shot at 400 steps may be the sweet spot for broad generalization.
+- **Half-shot overfits slower than zero-shot.** Zero-shot peaked at ~200 steps for generalization; half-shot peaks later (~400 steps), likely because the one-shot batches provide more diverse training signal early on.
+
+## Eval 10: Periodic eval over extended zero-shot training (3-number, seed=142, n=100)
+
+Pure zero-shot training evaluated every 100 steps with eval_compare (zs + os) and eval_natural on a fixed problem set, extended to ~2800 steps.
+
+![p3_zeroshot training curve](p3_zeroshot_training_curve.png)
+
+**Takeaways:**
+- **Overfitting is progressive and format-dependent.** The further a prompt format is from the training distribution (zero-shot tagged), the earlier it peaks and starts declining: one-shot peaks first (~step 200–300 at ~50%+), natural plateaus before step 1000 then decays, while zero-shot keeps climbing.
+- **Zero-shot is the only metric that doesn't plateau.** Train accuracy and zero-shot eval continue to rise past step 2000, confirming that the model keeps learning — but only for the specific format it's trained on.
+- **Confirms the overfitting hypothesis from Evals 8–9** with continuous measurement rather than point comparisons. Longer training narrows the model's competence toward the exact training prompt format.
+
+---
+
+# Part IV: Conclusions
+
+1. **One-shot learning is a highly efficient way to enhance performance.** Providing an in-context example during RL training leads to rapid accuracy gains (24% → 69% on 3-number countdown in 1200 steps).
+
+2. **One-shot learning does not transfer beyond a threshold.** Skills learned via one-shot training are tightly coupled to the one-shot prompt format and do not transfer to zero-shot or natural language inference (69% one-shot → 3% zero-shot).
+
+3. **Zero-shot learning transfers to one-shot and natural language prompts — if training is stopped at the right time.** Early zero-shot training builds general arithmetic skill that benefits all prompt formats (e.g., 200 steps of zero-shot training: 29% ZS, 51.5% OS, 22% natural). Continued training erodes this generalization.
+
+4. **Curriculum learning (one-shot → zero-shot) does not show meaningful skill transfer at 1.5B scale.** Gradually shifting from one-shot to zero-shot prompts during training does not produce shared representations. The model learns separate prompt-specific behaviors, and interleaving does not force generalization beyond what each format achieves independently.
+
+5. **Reward is not a reliable stopping criterion.** Optimizing for zero-shot too long causes deterioration at one-shot and natural language inference, even while training reward continues to rise. In practice, training should be guided by a custom eval suite covering the tasks we care about, not by the training reward signal.

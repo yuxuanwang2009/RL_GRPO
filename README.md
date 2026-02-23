@@ -1,5 +1,7 @@
 # GRPO (Group Relative Policy Optimization) — Countdown Task
 
+**[Writeup: Teaching a 1.5B Model Arithmetic with RL: What Transfers, What Doesn't, and When to Stop](writeup.pdf)**
+
 ## Overview
 A minimal GRPO training loop that teaches Qwen2.5-1.5B-Instruct to solve countdown puzzles: given 3 numbers and a target, find an arithmetic expression using all 3 numbers exactly once with `+`, `-`, `*`.
 

@@ -1,3 +1,18 @@
 
 # Model artifacts
 saved_model/
+checkpoints/
+
+# Generated outputs
+outputs/
+*_metrics.json
+*_training_curve.png
+*_kl_divergence.png
+
+# Python
+__pycache__/
+*.pyc
+
+# SLURM logs
+*.out
+*.err

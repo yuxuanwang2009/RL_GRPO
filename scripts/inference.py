@@ -1,22 +1,14 @@
+"""Run the trained model on a single countdown question."""
+
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
 import argparse
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
-
-_EXAMPLE_Q = (
-    "Using the numbers [3, 5, 2], create an expression that equals 13. "
-    "You must use all 3 numbers, each exactly once. Available operations: +, -, * (no division). "
-    "Show your reasoning in <think>...</think>, then write only the bare expression in <answer>...</answer>."
-)
-_EXAMPLE_A = (
-    "<think>\n"
-    "I need to reach 13 using [3, 5, 2].\n"
-    "Try 3 + 5 + 2 = 10. Too small, need multiplication.\n"
-    "Try 3 * 5 + 2 = 17. Too large.\n"
-    "Try 5 * 2 + 3 = 13. Yes!\n"
-    "</think>\n"
-    "<answer>5 * 2 + 3</answer>"
-)
+from grpo.prompts import EXAMPLE_Q, EXAMPLE_A
 
 
 def main():
@@ -38,8 +30,8 @@ def main():
 
     messages = [{"role": "system", "content": "You are a mathematical puzzle solver."}]
     if not args.no_oneshot:
-        messages.append({"role": "user", "content": _EXAMPLE_Q})
-        messages.append({"role": "assistant", "content": _EXAMPLE_A})
+        messages.append({"role": "user", "content": EXAMPLE_Q})
+        messages.append({"role": "assistant", "content": EXAMPLE_A})
     messages.append({"role": "user", "content": args.question})
 
     prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)

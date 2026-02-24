@@ -3,11 +3,13 @@ import json
 import os
 import torch
 
+from grpo.config import OUTPUTS_DIR
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="GRPO Training")
     parser.add_argument("--resume", action="store_true", help="Resume from checkpoint")
-    parser.add_argument("--run_name", type=str, default="grpo")
+    parser.add_argument("--run_name", type=str, default=None)
     parser.add_argument("--model_name", type=str, default=None,
                         help="Override model path for fresh start (e.g. saved_model)")
     parser.add_argument("--ref_model", type=str, default=None,
@@ -26,6 +28,10 @@ def parse_args():
     parser.add_argument("--num_count", type=int, default=None, help="Numbers per problem (default: 3)")
     parser.add_argument("--oneshot", action="store_true", default=None, help="Include one-shot example in prompt")
     parser.add_argument("--mix_oneshot", type=float, default=None, help="Fraction of prompts with one-shot (0.0-1.0)")
+
+    # Eval options (used by unified train.py)
+    parser.add_argument("--eval_every", type=int, default=None,
+                        help="Run cross-format eval every N steps (default: disabled)")
     return parser.parse_args()
 
 
@@ -43,7 +49,7 @@ def apply_overrides(cfg, args):
 
 
 def checkpoint_dir(run_name):
-    return os.path.join("checkpoints", run_name)
+    return os.path.join(OUTPUTS_DIR, "checkpoints", run_name)
 
 
 def save_checkpoint(policy, tokenizer, optimizer, step, metrics, cfg):

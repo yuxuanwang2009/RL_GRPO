@@ -1,100 +1,18 @@
 """Compare base model vs RL-trained model, with and without one-shot example."""
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import torch
-import json
-import random
-import re
-import ast
 import argparse
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from grpo.prompts import make_prompt
+from grpo.validation import check_answer
+from grpo.datasets import generate_problems
+
 MAX_NEW_TOKENS = 160
-
-_EXAMPLE_Q = (
-    "Using the numbers [3, 5, 2], create an expression that equals 13. "
-    "You must use all 3 numbers, each exactly once. Available operations: +, -, * (no division). "
-    "Show your reasoning in <think>...</think>, then write only the bare expression in <answer>...</answer>."
-)
-_EXAMPLE_A = (
-    "<think>\n"
-    "I need to reach 13 using [3, 5, 2].\n"
-    "Try 3 + 5 + 2 = 10. Too small, need multiplication.\n"
-    "Try 3 * 5 + 2 = 17. Too large.\n"
-    "Try 5 * 2 + 3 = 13. Yes!\n"
-    "</think>\n"
-    "<answer>5 * 2 + 3</answer>"
-)
-
-
-def generate_problems(n, seed, num_count=3):
-    random.seed(seed)
-    problems = []
-    ops = ['+', '-', '*']
-    for _ in range(n):
-        while True:
-            nums = [random.randint(1, 10) for _ in range(num_count)]
-            chosen_ops = [random.choice(ops) for _ in range(num_count - 1)]
-            # Build left-associative expression: ((a op1 b) op2 c) op3 d ...
-            expr = str(nums[0])
-            for i, op in enumerate(chosen_ops):
-                expr = f"({expr} {op} {nums[i+1]})"
-            target = eval(expr)
-            if 1 <= target <= 100 and target not in nums:
-                break
-        random.shuffle(nums)
-        problems.append({"target": target, "nums": nums})
-    return problems
-
-
-def make_prompt(problem, tokenizer, oneshot):
-    num_count = len(problem["nums"])
-    question = (
-        f"Using the numbers {problem['nums']}, create an expression that equals {problem['target']}. "
-        f"You must use all {num_count} numbers, each exactly once. Available operations: +, -, * (no division). "
-        f"Show your reasoning in <think>...</think>, then write only the bare expression in <answer>...</answer>."
-    )
-    messages = [{"role": "system", "content": "You are a mathematical puzzle solver."}]
-    if oneshot:
-        messages.append({"role": "user", "content": _EXAMPLE_Q})
-        messages.append({"role": "assistant", "content": _EXAMPLE_A})
-    messages.append({"role": "user", "content": question})
-    return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-
-
-def safe_eval(expr_str):
-    try:
-        tree = ast.parse(expr_str.strip(), mode='eval')
-    except SyntaxError:
-        return None
-    allowed = (ast.Expression, ast.BinOp, ast.UnaryOp, ast.Constant,
-               ast.Add, ast.Sub, ast.Mult, ast.USub)
-    for node in ast.walk(tree):
-        if not isinstance(node, allowed):
-            return None
-    try:
-        return eval(compile(tree, '<string>', 'eval'))
-    except Exception:
-        return None
-
-
-def check_answer(completion, problem):
-    target = problem["target"]
-    available = sorted(problem["nums"])
-    match = re.search(r'<answer>(.*?)</answer>', completion)
-    if not match:
-        return False
-    expr = match.group(1).strip()
-    result = safe_eval(expr)
-    if result is None or result != target:
-        return False
-    used = sorted(int(x) for x in re.findall(r'\d+', expr))
-    pool = available.copy()
-    for n in used:
-        if n in pool:
-            pool.remove(n)
-        else:
-            return False
-    return len(pool) == 0
 
 
 def evaluate_model(model_path, tokenizer, problems, oneshot, device, batch_size=16):

@@ -1,17 +1,23 @@
 import json
+import os
 import argparse
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 
+from grpo.config import OUTPUTS_DIR
+
+
 def moving_average(data, window_size):
     return np.convolve(data, np.ones(window_size)/window_size, mode='valid')
+
 
 def load_metrics(json_path="grpo_metrics.json"):
     """Load metrics from JSON file."""
     with open(json_path, "r") as f:
         return json.load(f)
+
 
 def plot_metrics(metrics_data, smooth=False, output_prefix="grpo", verbose=False):
     """Plot training metrics and save to PNG files."""
@@ -62,10 +68,11 @@ def plot_metrics(metrics_data, smooth=False, output_prefix="grpo", verbose=False
     ax.set_title("Train/Val Accuracy{}".format(" (smoothed)" if smooth else " (20-step averages)"))
     ax.legend(loc="upper left", bbox_to_anchor=(0.05, 0.95), fontsize="small")
 
-    fig.savefig("{}_training_curve.png".format(output_prefix), dpi=100, bbox_inches="tight")
+    curve_path = os.path.join(OUTPUTS_DIR, "{}_training_curve.png".format(output_prefix))
+    fig.savefig(curve_path, dpi=100, bbox_inches="tight")
     plt.close(fig)
     if verbose:
-        print("Saved: {}_training_curve.png".format(output_prefix))
+        print("Saved: {}".format(curve_path))
 
     # Plot 2: KL Divergence
     fig_kl, ax_kl = plt.subplots()
@@ -79,10 +86,12 @@ def plot_metrics(metrics_data, smooth=False, output_prefix="grpo", verbose=False
     ax_kl.tick_params(axis='y', labelcolor="tab:red")
     ax_kl.set_title("KL Divergence over Training{}".format(" (smoothed)" if smooth else ""))
     ax_kl.legend(loc="upper left")
-    fig_kl.savefig("{}_kl_divergence.png".format(output_prefix), dpi=100, bbox_inches="tight")
+    kl_path = os.path.join(OUTPUTS_DIR, "{}_kl_divergence.png".format(output_prefix))
+    fig_kl.savefig(kl_path, dpi=100, bbox_inches="tight")
     plt.close(fig_kl)
     if verbose:
-        print("Saved: {}_kl_divergence.png".format(output_prefix))
+        print("Saved: {}".format(kl_path))
+
 
 def main():
     parser = argparse.ArgumentParser(description="Plot GRPO metrics with optional smoothing.")
@@ -95,6 +104,7 @@ def main():
     prefix = args.prefix or args.input.replace("_metrics.json", "")
     plot_metrics(metrics_data, smooth=args.smooth, output_prefix=prefix, verbose=True)
     print("Plotting complete!")
+
 
 if __name__ == "__main__":
     main()

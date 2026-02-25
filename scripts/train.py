@@ -177,7 +177,7 @@ def main():
     if args.resume:
         ckpt = load_checkpoint(cfg.run_name)
         model_path = ckpt["policy_path"]
-        ref_path = args.ref_model or ckpt["policy_path"]
+        ref_path = args.ref_model or cfg.model_name
         start_step = ckpt["step"]
         rewards_avg = ckpt["metrics"].get("rewards_avg", [])
         train_accuracies_avg = ckpt["metrics"].get("train_accuracies_avg", [])

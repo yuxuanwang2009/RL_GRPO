@@ -251,6 +251,9 @@ def main():
                 eval_results[k].append(results[k])
             print(f"EVAL step {step}: zs={results['zs']:.1%}, os={results['os']:.1%}, nat={results['natural']:.1%}")
 
+        # --- Free stale gradients before the memory-heavy generation phase ---
+        optimizer.zero_grad(set_to_none=True)
+
         # --- Move ref to GPU for this step ---
         ref.to(cfg.device)
 
@@ -319,18 +322,24 @@ def main():
         # Optimization
         back_input_ids = sequences
         back_attn_mask = (sequences != tokenizer.pad_token_id).long()
+        total_samples = back_input_ids.shape[0]
+        micro_batch = total_samples // cfg.grad_accum_steps
+
         with torch.no_grad():
-            ref_logprobs = get_batch_logprobs(ref, back_input_ids, back_attn_mask, prompt_len)
+            ref_logprobs = torch.cat([
+                get_batch_logprobs(ref, back_input_ids[s:s+micro_batch], back_attn_mask[s:s+micro_batch], prompt_len)
+                for s in range(0, total_samples, micro_batch)
+            ], dim=0)
             ref.to("cpu")  # Free ~3GB VRAM — ref not needed until next step
             torch.cuda.empty_cache()
-            old_logprobs = get_batch_logprobs(policy, back_input_ids, back_attn_mask, prompt_len)
 
-        for _ in range(cfg.num_inner_updates):
+        old_logprobs = None
+
+        for inner_idx in range(cfg.num_inner_updates):
             optimizer.zero_grad(set_to_none=True)
-            total_samples = back_input_ids.shape[0]
-            micro_batch = total_samples // cfg.grad_accum_steps
             accum_loss = 0.0
             accum_kl = 0.0
+            old_logprobs_chunks = []
 
             for ga_idx in range(cfg.grad_accum_steps):
                 s = ga_idx * micro_batch
@@ -338,7 +347,15 @@ def main():
 
                 mb_curr_lp = get_batch_logprobs(policy, back_input_ids[s:e], back_attn_mask[s:e], prompt_len)
 
-                ratio = torch.exp(mb_curr_lp - old_logprobs[s:e])
+                # First inner update: old policy == current policy,
+                # reuse detached logprobs instead of a separate forward pass.
+                if inner_idx == 0:
+                    mb_old_lp = mb_curr_lp.detach()
+                    old_logprobs_chunks.append(mb_old_lp)
+                else:
+                    mb_old_lp = old_logprobs[s:e]
+
+                ratio = torch.exp(mb_curr_lp - mb_old_lp)
                 surr1 = ratio * advantages[s:e].unsqueeze(1)
                 surr2 = torch.clamp(ratio, 1-cfg.epsilon, 1+cfg.epsilon) * advantages[s:e].unsqueeze(1)
 
@@ -355,6 +372,9 @@ def main():
 
                 accum_loss += ppo_loss.item() / cfg.grad_accum_steps
                 accum_kl += kl_loss.item() / cfg.grad_accum_steps
+
+            if inner_idx == 0:
+                old_logprobs = torch.cat(old_logprobs_chunks, dim=0)
 
             torch.nn.utils.clip_grad_norm_(policy.parameters(), cfg.clip_grad_norm)
             optimizer.step()

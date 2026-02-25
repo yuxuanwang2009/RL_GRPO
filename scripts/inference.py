@@ -4,10 +4,12 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import os
 import torch
 import argparse
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from grpo.config import OUTPUTS_DIR
 from grpo.prompts import EXAMPLE_Q, EXAMPLE_A
 
 
@@ -15,14 +17,16 @@ def main():
     parser = argparse.ArgumentParser(description="Generate countdown answers using trained GRPO model.")
     parser.add_argument("question", type=str,
                         help="e.g. 'Using the numbers [4, 7, 3], create an expression that equals 25.'")
-    parser.add_argument("--model_path", type=str, default="saved_model")
+    parser.add_argument("--run_name", type=str, required=True,
+                        help="Run name (loads from outputs/checkpoints/<run_name>/policy)")
     parser.add_argument("--no_oneshot", action="store_true", help="Skip one-shot example")
     args = parser.parse_args()
 
+    model_path = os.path.join(OUTPUTS_DIR, "checkpoints", args.run_name, "policy")
     model = AutoModelForCausalLM.from_pretrained(
-        args.model_path, dtype=torch.bfloat16, trust_remote_code=True
+        model_path, dtype=torch.bfloat16, trust_remote_code=True
     )
-    tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)

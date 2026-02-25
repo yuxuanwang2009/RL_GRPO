@@ -4,10 +4,12 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import os
 import torch
 import argparse
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from grpo.config import OUTPUTS_DIR
 from grpo.prompts import make_prompt
 from grpo.validation import check_answer
 from grpo.datasets import generate_problems
@@ -54,8 +56,8 @@ def main():
     parser.add_argument("--num_count", type=int, default=3, help="Number of integers per problem")
     parser.add_argument("--num_problems", type=int, default=100)
     parser.add_argument("--seed", type=int, default=142)
-    parser.add_argument("--models", nargs="+", default=None,
-                        help="model_label:path pairs, e.g. 'Base:Qwen/Qwen2.5-1.5B-Instruct' 'R1:saved_model'")
+    parser.add_argument("--models", nargs="+", required=True,
+                        help="label:run_name pairs (e.g. 'R1:r1'); use label:hf://ID for HuggingFace models (e.g. 'Base:hf://Qwen/Qwen2.5-1.5B-Instruct')")
     parser.add_argument("--oneshot_only", action="store_true", help="Only run one-shot eval")
     parser.add_argument("--zeroshot_only", action="store_true", help="Only run zero-shot eval")
     args = parser.parse_args()
@@ -65,17 +67,15 @@ def main():
 
     tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-1.5B-Instruct", trust_remote_code=True)
 
-    # Parse model configs
-    if args.models:
-        model_entries = []
-        for m in args.models:
-            label, path = m.split(":", 1)
-            model_entries.append((label, path))
-    else:
-        model_entries = [
-            ("Base model", "Qwen/Qwen2.5-1.5B-Instruct"),
-            ("RL-trained model", "saved_model"),
-        ]
+    # Parse model configs: label:run_name or label:hf://model_id
+    model_entries = []
+    for m in args.models:
+        label, ref = m.split(":", 1)
+        if ref.startswith("hf://"):
+            path = ref[5:]
+        else:
+            path = os.path.join(OUTPUTS_DIR, "checkpoints", ref, "policy")
+        model_entries.append((label, path))
 
     # Determine which prompt modes to run
     modes = []

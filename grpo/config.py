@@ -27,7 +27,7 @@ class GRPOConfig:
     epsilon: float = 0.2
     num_inner_updates: int = 1  # Key stability fix: 1 update per batch to prevent KL explosion
     clip_grad_norm: float = 0.5  # Stricter clipping
-    grad_accum_steps: int = 1  # Split PPO update into N gradient accumulation steps to reduce peak memory
+    grad_accum_steps: int = 8  # Split PPO update into N gradient accumulation steps to reduce peak memory
 
     # Task
     num_count: int = 3

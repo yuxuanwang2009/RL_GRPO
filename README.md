@@ -104,7 +104,7 @@ python scripts/eval_compare.py [OPTIONS]
 
 | Flag | Type | Default | Description |
 |---|---|---|---|
-| `--models` | str+ | Base + `saved_model` | Model label:path pairs (e.g. `"R1:outputs/checkpoints/r1/policy"`) |
+| `--models` | str+ | (required) | `label:run_name` pairs; use `label:hf://ID` for HuggingFace models |
 | `--num_count` | int | `3` | Numbers per problem |
 | `--num_problems` | int | `100` | Size of eval set |
 | `--seed` | int | `142` | RNG seed for reproducible problems |
@@ -113,7 +113,7 @@ python scripts/eval_compare.py [OPTIONS]
 
 Example:
 ```bash
-python scripts/eval_compare.py --models "Base:Qwen/Qwen2.5-1.5B-Instruct" "R1:outputs/checkpoints/r1/policy"
+python scripts/eval_compare.py --models "Base:hf://Qwen/Qwen2.5-1.5B-Instruct" "R1:r1"
 ```
 
 ### Evaluate Natural (`scripts/eval_natural.py`)
@@ -126,14 +126,14 @@ python scripts/eval_natural.py [OPTIONS]
 
 | Flag | Type | Default | Description |
 |---|---|---|---|
-| `--models` | str+ | Base + `checkpoints/base_zs3/policy` | Model label:path pairs |
+| `--models` | str+ | (required) | `label:run_name` pairs; use `label:hf://ID` for HuggingFace models |
 | `--num_count` | int | `3` | Numbers per problem |
 | `--num_problems` | int | `100` | Size of eval set |
 | `--seed` | int | `142` | RNG seed for reproducible problems |
 
 Example:
 ```bash
-python scripts/eval_natural.py --models "Base:Qwen/Qwen2.5-1.5B-Instruct" "ZS200:outputs/checkpoints/zs200/policy"
+python scripts/eval_natural.py --models "Base:hf://Qwen/Qwen2.5-1.5B-Instruct" "ZS200:zs200"
 ```
 
 ### Inference (`scripts/inference.py`)
@@ -147,13 +147,13 @@ python scripts/inference.py QUESTION [OPTIONS]
 | Flag | Type | Default | Description |
 |---|---|---|---|
 | `QUESTION` | str | (required) | The countdown puzzle question |
-| `--model_path` | str | `saved_model` | Path to model weights |
+| `--run_name` | str | (required) | Run name (loads from `outputs/checkpoints/<run_name>/policy`) |
 | `--no_oneshot` | flag | off | Skip one-shot example in prompt |
 
 Example:
 ```bash
-python scripts/inference.py "Using the numbers [4, 7, 3], create an expression that equals 25."
-python scripts/inference.py --model_path outputs/checkpoints/r1/policy --no_oneshot "..."
+python scripts/inference.py --run_name r1 "Using the numbers [4, 7, 3], create an expression that equals 25."
+python scripts/inference.py --run_name r1 --no_oneshot "..."
 ```
 
 ### Plot Metrics (`grpo.plotting`)

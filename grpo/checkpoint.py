@@ -11,7 +11,7 @@ def parse_args():
     parser.add_argument("--resume", action="store_true", help="Resume from checkpoint")
     parser.add_argument("--run_name", type=str, default=None)
     parser.add_argument("--model_name", type=str, default=None,
-                        help="Override model path for fresh start (e.g. saved_model)")
+                        help="Override model path for fresh start (HuggingFace ID or local path)")
     parser.add_argument("--ref_model", type=str, default=None,
                         help="Explicit path to ref model (default: same as policy)")
 

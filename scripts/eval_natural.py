@@ -4,10 +4,12 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import os
 import torch
 import argparse
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from grpo.config import OUTPUTS_DIR
 from grpo.prompts import make_natural_prompt
 from grpo.validation import check_answer_natural
 from grpo.datasets import generate_problems
@@ -54,8 +56,8 @@ def main():
     parser.add_argument("--num_count", type=int, default=3)
     parser.add_argument("--num_problems", type=int, default=100)
     parser.add_argument("--seed", type=int, default=142)
-    parser.add_argument("--models", nargs="+", default=None,
-                        help="model_label:path pairs, e.g. 'Base:Qwen/Qwen2.5-1.5B-Instruct'")
+    parser.add_argument("--models", nargs="+", required=True,
+                        help="label:run_name pairs (e.g. 'ZS200:zs200'); use label:hf://ID for HuggingFace models (e.g. 'Base:hf://Qwen/Qwen2.5-1.5B-Instruct')")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -63,16 +65,15 @@ def main():
 
     tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-1.5B-Instruct", trust_remote_code=True)
 
-    if args.models:
-        model_entries = []
-        for m in args.models:
-            label, path = m.split(":", 1)
-            model_entries.append((label, path))
-    else:
-        model_entries = [
-            ("Base", "Qwen/Qwen2.5-1.5B-Instruct"),
-            ("Base+ZS200", "checkpoints/base_zs3/policy"),
-        ]
+    # Parse model configs: label:run_name or label:hf://model_id
+    model_entries = []
+    for m in args.models:
+        label, ref = m.split(":", 1)
+        if ref.startswith("hf://"):
+            path = ref[5:]
+        else:
+            path = os.path.join(OUTPUTS_DIR, "checkpoints", ref, "policy")
+        model_entries.append((label, path))
 
     results = []
     for label, path in model_entries:

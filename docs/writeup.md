@@ -103,7 +103,7 @@ After just 200 steps of zero-shot training, the model outperforms the 1200-step 
 
 To understand the dynamics in detail, we ran an extended zero-shot training run with periodic evaluation every 100 steps on a fixed problem set.
 
-![Training curve with periodic eval](p3_zeroshot_training_curve.png)
+![Training curve with periodic eval](/outputs/p3_zeroshot_training_curve.png)
 
 The overfitting is progressive and format-dependent. The further a prompt format is from the training distribution, the earlier it peaks and the sooner it starts declining. One-shot accuracy peaks first, around step 200-300 at roughly 50%, then steadily erodes. Natural language plateaus before step 1000, then begins to decay. Only zero-shot accuracy -- the training distribution -- keeps climbing past step 2000.
 

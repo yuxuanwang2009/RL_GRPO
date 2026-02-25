@@ -215,7 +215,7 @@ Both models: half-shot training (linear decay from 100% one-shot to 0%), +0.1 fo
 
 Pure zero-shot training evaluated every 100 steps with eval_compare (zs + os) and eval_natural on a fixed problem set, extended to ~2800 steps.
 
-![p3_zeroshot training curve](p3_zeroshot_training_curve.png)
+![p3_zeroshot training curve](/outputs/p3_zeroshot_training_curve.png)
 
 **Takeaways:**
 - **Overfitting is progressive and format-dependent.** The further a prompt format is from the training distribution (zero-shot tagged), the earlier it peaks and starts declining: one-shot peaks first (~step 200–300 at ~50%+), natural plateaus before step 1000 then decays, while zero-shot keeps climbing.

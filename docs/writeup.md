@@ -109,6 +109,12 @@ The overfitting is progressive and format-dependent. The further a prompt format
 
 The training reward, meanwhile, continues to rise throughout. This is the core trap: the signal you're optimizing looks healthy, but the model's actual capabilities are narrowing with every step.
 
+An extended one-shot training run (3600 steps) shows the same pattern in reverse.
+
+![One-shot training curve with periodic eval](/outputs/os3600_training_curve.png)
+
+Train and one-shot accuracy climb steadily from ~5% to ~80%, but zero-shot accuracy peaks early (>20% around step 200) and then collapses to near 0% by step 1500. The collapse is more severe than in the zero-shot case: the model not only loses arithmetic capability in zero-shot mode, but stops producing `<answer>` tags entirely (97/100 format failures at step 3600). Parsing past the format errors reveals 18% raw math accuracy -- slightly above the 10% base model, but well below the early-training peak. Natural language accuracy rises from <10% to ~15% in the first 500 steps and then stagnates. In both directions, early training builds general skill and late training erodes it.
+
 ## Conclusions
 
 **One-shot learning is highly efficient but non-transferable.** Providing an in-context example during RL training produces dramatic accuracy gains (24% to 69% on 3-number countdown), but the resulting skill is tightly coupled to the one-shot prompt format. Remove the example at inference time and performance collapses to near-baseline levels. The model learns conditional problem-solving, not unconditional arithmetic.

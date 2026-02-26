@@ -222,6 +222,18 @@ Pure zero-shot training evaluated every 100 steps with eval_compare (zs + os) an
 - **Zero-shot is the only metric that doesn't plateau.** Train accuracy and zero-shot eval continue to rise past step 2000, confirming that the model keeps learning — but only for the specific format it's trained on.
 - **Confirms the overfitting hypothesis from Evals 8–9** with continuous measurement rather than point comparisons. Longer training narrows the model's competence toward the exact training prompt format.
 
+## Eval 11: Periodic eval over extended one-shot training (3-number, n=100)
+
+Pure one-shot training evaluated periodically on zero-shot, one-shot, and natural prompts, extended to 3600 steps.
+
+![os3600 training curve](/outputs/os3600_training_curve.png)
+
+**Takeaways:**
+- **Mirrors Eval 10 from the opposite direction.** Train and one-shot accuracy steadily climb from ~5% to ~80% over 3600 steps, while zero-shot peaks early (>20% around step 200) then collapses to near 0% by step 1500. One-shot training overfits toward one-shot format just as zero-shot training overfits toward zero-shot format.
+- **Zero-shot collapse is more severe than the reverse.** In Eval 10, one-shot accuracy under zero-shot training plateaued and slowly decayed. Here, zero-shot accuracy under one-shot training collapses almost completely — the model stops producing `<answer>` tags in zero-shot mode (97/100 format failures at step 3600). Raw math accuracy (parsing past format errors) is 18%, slightly above base (10%) but well below the early-training peak of >20%.
+- **Natural language gains are front-loaded.** Natural accuracy rises from <10% to ~15% in the first ~500 steps, then stagnates for the remaining 3000 steps.
+- **Confirms conclusion 5: reward is not a reliable stopping criterion.** Training reward and one-shot eval keep climbing throughout, masking the progressive loss of zero-shot and natural language capability.
+
 ---
 
 # Part IV: Conclusions

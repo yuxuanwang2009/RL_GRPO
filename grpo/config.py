@@ -32,7 +32,7 @@ class GRPOConfig:
     # Task
     num_count: int = 3
     oneshot: bool = False
-    mix_oneshot: float = 0.0  # fraction of prompts that get one-shot (0.0 = all zero-shot, 0.5 = 50/50)
+    mix_oneshot: float = 0.0  # decay rate for one-shot curriculum (0.0 = always one-shot, 0.5 = decay to 50%, 1.0 = fully zero-shot by end)
 
     # Run management
     run_name: str = "grpo"

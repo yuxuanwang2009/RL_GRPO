@@ -262,7 +262,7 @@ def main():
         answers = []
         # Decide one-shot vs zero-shot for entire batch (avoids padding waste)
         if cfg.mix_oneshot > 0:
-            oneshot_prob = 1.0 - step / (cfg.num_iterations - 1)
+            oneshot_prob = 1.0 - cfg.mix_oneshot * step / (cfg.num_iterations - 1)
             batch_oneshot = random.random() < oneshot_prob
         else:
             batch_oneshot = cfg.oneshot

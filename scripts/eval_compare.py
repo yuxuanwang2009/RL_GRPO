@@ -141,7 +141,9 @@ def main():
     # Open verbose output file if requested
     verbose_file = None
     if args.verbose:
-        verbose_path = os.path.join(OUTPUTS_DIR, "verbose_eval.txt")
+        run_names = "_".join(label for label, _ in model_entries)
+        run_names = run_names.replace("/", "-")
+        verbose_path = os.path.join(OUTPUTS_DIR, f"{run_names}_verbose_eval.txt")
         os.makedirs(OUTPUTS_DIR, exist_ok=True)
         verbose_file = open(verbose_path, "w")
         print(f"Verbose output will be written to {verbose_path}")

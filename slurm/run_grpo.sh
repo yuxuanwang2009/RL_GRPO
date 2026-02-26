@@ -12,4 +12,4 @@ module load conda
 conda activate grpo
 
 cd /home/yuxuan.wang/RL_GRPO
-PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python -u scripts/train.py --oneshot --run_name os400 --num_iterations 3600 --eval_every 50
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python -u scripts/train.py --mix_oneshot 1 --run_name hs3600 --num_iterations 3600 --eval_every 50
